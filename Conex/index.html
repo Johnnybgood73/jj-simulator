@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Conex Grow (Sim)</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="bottom-nav">
+    <button class="nav-btn active" data-screen="home">Dashboard</button>
+    <button class="nav-btn" data-screen="grows">Ambientes</button>
+    <button class="nav-btn" data-screen="plants">Plantas</button>
+    <button class="nav-btn" data-screen="cycles">Ciclos</button>
+  </div>
+
+  <div id="home" class="screen active">
+    <div class="card">
+      <div class="row">
+        <div id="fanIcon" class="icon" title="Exaustor">&#127744;</div>
+        <div>
+          <div class="label"><span class="glyph">&#127788;</span>Exaustor</div>
+          <div id="homeStatus" class="muted">Carregando...</div>
+          <div id="homeMode" class="muted">Modo: --</div>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <input id="homeFanSlider" type="range" min="0" max="100" value="0" />
+        <div id="homeFanHint" class="muted" style="margin-top:8px">
+          Ajuste rapido (aplica ao soltar).
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Modo</div>
+      <div class="mode-grid">
+        <button class="mode-btn" id="btnModeManual" data-mode="manual">Manual</button>
+        <button class="mode-btn" id="btnModeEco" data-mode="eco">Eco</button>
+        <button class="mode-btn" id="btnModeBoost" data-mode="boost">Boost</button>
+        <button class="mode-btn" id="btnModeAuto" data-mode="auto">Auto</button>
+      </div>
+    </div>
+
+    <div class="sensor-grid">
+      <div id="insideCard" class="card sensor-card">
+        <div class="sensor-title"><span class="glyph">&#127777;</span>Interno</div>
+        <div id="insideTemp" class="sensor-temp">--.-&deg;C</div>
+        <div id="insideHum" class="muted">--%</div>
+      </div>
+
+      <div id="outsideCard" class="card sensor-card">
+        <div class="sensor-title"><span class="glyph">&#127777;</span>Externo</div>
+        <div id="outsideTemp" class="sensor-temp">--.-&deg;C</div>
+        <div id="outsideHum" class="muted">--%</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div>
+          <div class="label">Backend</div>
+          <div class="muted">Simulador local (sem ESP32)</div>
+        </div>
+
+        <label class="toggle">
+          <input id="toggleFail" type="checkbox">
+          <span>Simular falha</span>
+        </label>
+      </div>
+      <div class="muted" style="margin-top:10px">
+        Falha simulada afeta troca de modo, CRUD e ajuste manual do fan.
+      </div>
+    </div>
+  </div>
+
+  <div id="grows" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Ambientes</div>
+        <button id="btnRefreshGrows">Atualizar</button>
+      </div>
+      <div id="growsList" class="list"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Novo ambiente</div>
+      <div class="form-grid">
+        <input id="growName" type="text" placeholder="Nome do ambiente" />
+        <div id="growTypeSegment" class="segmented">
+          <button type="button" class="seg-btn active" data-grow-type="indoor">Indoor</button>
+          <button type="button" class="seg-btn" data-grow-type="outdoor">Outdoor</button>
+        </div>
+        <input id="growType" type="hidden" value="indoor" />
+        <select id="growSubtype"></select>
+        <input id="growWidth" type="number" min="1" placeholder="Largura (cm)" />
+        <input id="growDepth" type="number" min="1" placeholder="Profundidade (cm)" />
+        <input id="growHeight" type="number" min="1" placeholder="Altura (cm)" />
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCreateGrow">Criar ambiente</button>
+      </div>
+      <div id="growsMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="growDetail" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Detalhes do ambiente</div>
+        <button id="btnGrowDetailBack">Voltar para Ambientes</button>
+      </div>
+      <div id="growDetailInfo" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="row spread">
+        <div class="label">Plantas no ambiente</div>
+      </div>
+      <div id="growPlantsList" class="list"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="row spread">
+        <div class="label">Equipamentos</div>
+        <button id="btnGrowToolToggle">Adicionar equipamento</button>
+      </div>
+      <div id="growToolsList" class="list"></div>
+    </div>
+    <div id="growToolFormCard" class="card" style="margin-top:12px;display:none">
+      <div class="label" style="margin-bottom:10px">Novo equipamento</div>
+      <div class="form-grid">
+        <select id="growToolKind">
+          <option value="">Selecione o equipamento</option>
+          <option value="light">Iluminacao</option>
+          <option value="exhaust">Exaustao</option>
+          <option value="filter">Filtragem</option>
+          <option value="internal_ventilation">Ventilacao interna</option>
+          <option value="passive_intake">Entrada de ar</option>
+        </select>
+      </div>
+      <div id="toolFormLight" class="tool-form-block" style="margin-top:10px;display:none">
+        <div class="form-grid">
+          <select id="toolLightType">
+            <option value="quantum_board">LED Quantum Board</option>
+            <option value="quantum_bar">Quantum Bar</option>
+            <option value="cob_led">COB LED</option>
+            <option value="hps">HPS</option>
+            <option value="mh">MH</option>
+            <option value="outro">Outro</option>
+          </select>
+          <input id="toolLightPowerW" type="number" min="0" placeholder="Potencia (W)" />
+          <select id="toolLightHeightMode">
+            <option value="variable">Altura variavel</option>
+            <option value="fixed">Altura fixa</option>
+          </select>
+          <input id="toolLightMinTopCm" type="number" min="0" placeholder="Distancia minima LED-topo (cm)" />
+          <input id="toolLightMaxDropCm" type="number" min="0" placeholder="Descida maxima da luminaria (cm)" />
+          <label class="mini-check"><input id="toolLightFullDrop" type="checkbox" /> Curso completo (sem limite de descida)</label>
+        </div>
+      </div>
+      <div id="toolFormExhaust" class="tool-form-block" style="margin-top:10px;display:none">
+        <div class="form-grid">
+          <input id="toolExhaustModel" type="text" placeholder="Modelo" />
+          <select id="toolExhaustType">
+            <option value="inline">Inline/Centrifugo</option>
+            <option value="axial">Axial</option>
+            <option value="outro">Outro</option>
+          </select>
+          <input id="toolExhaustFlow" type="number" min="0" placeholder="Vazao max (m3/h)" />
+          <input id="toolExhaustPowerW" type="number" min="0" placeholder="Potencia (W)" />
+          <input id="toolExhaustDuctDiameterMm" type="number" min="0" placeholder="Diametro do duto (mm)" />
+          <input id="toolExhaustMaxDuctLengthCm" type="number" min="0" placeholder="Comprimento maximo de duto (cm)" />
+          <label class="mini-check"><input id="toolExhaustFullLength" type="checkbox" /> Duto completo (sem limite)</label>
+        </div>
+      </div>
+      <div id="toolFormFilter" class="tool-form-block" style="margin-top:10px;display:none">
+        <div class="form-grid">
+          <select id="toolFilterType">
+            <option value="carvao_ativado">Carvao ativado</option>
+            <option value="hepa">HEPA</option>
+            <option value="hibrido">Hibrido</option>
+            <option value="outro">Outro</option>
+          </select>
+          <input id="toolFilterModel" type="text" placeholder="Modelo" />
+          <input id="toolFilterDiameterMm" type="number" min="0" placeholder="Diametro (mm)" />
+          <input id="toolFilterLengthCm" type="number" min="0" placeholder="Comprimento (cm)" />
+          <input id="toolFilterFlowM3h" type="number" min="0" placeholder="Vazao recomendada (m3/h)" />
+        </div>
+      </div>
+      <div id="toolFormInternalVent" class="tool-form-block" style="margin-top:10px;display:none">
+        <div class="form-grid">
+          <input id="toolInternalVentCount" type="number" min="0" placeholder="Qtd ventiladores" />
+          <input id="toolInternalVentSizeCm" type="number" min="0" placeholder="Diametro da helice (cm)" />
+          <input id="toolInternalVentPowerW" type="number" min="0" placeholder="Potencia por ventilador (W)" />
+          <input id="toolInternalVentMaxHeightCm" type="number" min="0" placeholder="Altura maxima de instalacao (cm)" />
+          <label class="mini-check"><input id="toolInternalVentFullHeight" type="checkbox" /> Altura completa (sem limite)</label>
+        </div>
+      </div>
+      <div id="toolFormPassiveIntake" class="tool-form-block" style="margin-top:10px;display:none">
+        <div class="form-grid">
+          <select id="toolPassiveMode">
+            <option value="passiva">Passiva</option>
+            <option value="ativa">Ativa</option>
+          </select>
+          <input id="toolPassiveWidthCm" type="number" min="0" placeholder="Largura da entrada (cm)" />
+          <input id="toolPassiveHeightCm" type="number" min="0" placeholder="Altura da entrada (cm)" />
+          <input id="toolPassiveAreaCm2" type="number" min="0" placeholder="Area de abertura (cm2)" />
+          <label class="mini-check"><input id="toolPassiveFullHeight" type="checkbox" /> Altura completa (sem limite)</label>
+          <input id="toolPassiveNotes" type="text" placeholder="Observacoes" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnGrowToolAdd">Adicionar</button>
+      </div>
+      <div id="growToolMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="plants" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Especies</div>
+        <div class="row">
+          <button id="btnSpeciesPanelToggle">Mostrar</button>
+          <button id="btnSpeciesToggle" style="display:none">Nova especie</button>
+        </div>
+      </div>
+      <div id="speciesPanelBody" style="display:none">
+        <div id="speciesList" class="list"></div>
+        <div id="speciesFormCard" class="card" style="margin-top:10px;display:none">
+          <div class="label" style="margin-bottom:10px">Cadastrar especie</div>
+          <div class="form-grid">
+            <input id="speciesNameInput" type="text" placeholder="Nome da especie" />
+            <input id="speciesVegDays" type="number" min="0" placeholder="Vegetacao media (dias)" />
+            <input id="speciesFloraDays" type="number" min="0" placeholder="Flora media (dias)" />
+            <input id="speciesIndoorHeight" type="number" min="0" placeholder="Altura indoor (cm)" />
+            <input id="speciesOutdoorHeight" type="number" min="0" placeholder="Altura outdoor (cm)" />
+            <input id="speciesIndoorYield" type="number" min="0" placeholder="Rendimento indoor (g/m2)" />
+            <input id="speciesOutdoorYield" type="number" min="0" placeholder="Rendimento outdoor (g/m2)" />
+            <input id="speciesSativaPct" type="number" min="0" max="100" placeholder="Sativa (%)" />
+            <input id="speciesIndicaPct" type="number" min="0" max="100" placeholder="Indica (%)" />
+            <input id="speciesThcPct" type="number" min="0" max="100" placeholder="THC (%)" />
+            <input id="speciesCbdPct" type="number" min="0" max="100" placeholder="CBD (%)" />
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button id="btnCreateSpecies">Salvar especie</button>
+          </div>
+          <div id="speciesMsg" class="muted" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="row spread">
+        <div class="label">Plantas</div>
+        <button id="btnRefreshPlants">Atualizar</button>
+      </div>
+      <div id="plantsList" class="list"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Nova Planta</div>
+      <div class="form-grid">
+        <input id="plantName" type="text" placeholder="Nome da planta" />
+        <select id="plantSpeciesId"></select>
+        <select id="plantGrow"></select>
+        <select id="plantSource">
+          <option value="semente">Origem: semente</option>
+          <option value="clone">Origem: clone</option>
+          <option value="planta_estabelecida">Origem: planta estabelecida</option>
+        </select>
+        <select id="plantPurpose">
+          <option value="colheita">Finalidade: colheita</option>
+          <option value="reproducao">Finalidade: reproducao</option>
+          <option value="mae">Finalidade: planta mae</option>
+        </select>
+        <select id="plantSex">
+          <option value="indefinido">Sexo: indefinido</option>
+          <option value="femea">Sexo: femea</option>
+          <option value="macho">Sexo: macho</option>
+          <option value="hermafrodita">Sexo: hermafrodita</option>
+        </select>
+        <select id="plantLifeState">
+          <option value="nao_germinada">Tempo de vida: nao germinada</option>
+          <option value="germinacao_iniciada">Tempo de vida: germinacao iniciada</option>
+        </select>
+        <select id="plantContainer" disabled>
+          <option value="">Recipiente/vaso</option>
+          <option value="agua">Recipiente com agua</option>
+          <option value="papel_toalha">Papel toalha</option>
+          <option value="jiffy">Celula (estilo jiffy)</option>
+          <option value="vaso_200ml">Vaso 200 ml</option>
+          <option value="vaso_500ml">Vaso 500 ml</option>
+          <option value="vaso_1l">Vaso 1 L</option>
+          <option value="vaso_3l">Vaso 3 L</option>
+          <option value="vaso_5l">Vaso 5 L</option>
+          <option value="vaso_7l">Vaso 7 L</option>
+          <option value="vaso_11l">Vaso 11 L</option>
+          <option value="vaso_15l">Vaso 15 L</option>
+          <option value="hidroponico">Hidroponico</option>
+        </select>
+        <select id="plantSoilType" disabled>
+          <option value="">Tipo de solo</option>
+          <option value="organico">Organico</option>
+          <option value="mineral">Mineral</option>
+        </select>
+        <input id="plantGermStart" type="datetime-local" />
+        <select id="plantPhotoperiod">
+          <option value="fotoperiodo">Fotoperiodo</option>
+          <option value="autoflower">Autoflorecente</option>
+        </select>
+        <details id="plantTrainingDetails" class="training-details">
+          <summary id="plantTrainingSummary">Treinamentos: indefinido</summary>
+          <div class="training-grid">
+            <label class="mini-check"><input type="checkbox" data-training="indefinido" checked /> Indefinido</label>
+            <label class="mini-check"><input type="checkbox" data-training="lst" /> LST</label>
+            <label class="mini-check"><input type="checkbox" data-training="topping" /> Topping</label>
+            <label class="mini-check"><input type="checkbox" data-training="fim" /> FIM</label>
+            <label class="mini-check"><input type="checkbox" data-training="scrog" /> SCROG</label>
+            <label class="mini-check"><input type="checkbox" data-training="sog" /> SOG</label>
+            <label class="mini-check"><input type="checkbox" data-training="supercrop" /> Supercrop</label>
+            <label class="mini-check"><input type="checkbox" data-training="mainline" /> Mainline</label>
+          </div>
+        </details>
+        <input id="plantNotes" type="text" placeholder="Observacoes (opcional)" />
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCreatePlant" disabled>Criar Planta</button>
+      </div>
+      <div id="plantsMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="cycles" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Ciclos</div>
+        <button id="btnRefreshCycles">Atualizar</button>
+      </div>
+      <div id="cyclesList" class="list"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Novo Ciclo</div>
+      <div class="muted">Inicie o assistente guiado para criar seu ciclo por etapas.</div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnNewCycle">Criar novo ciclo</button>
+      </div>
+      <div id="cyclesMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="cycleStep1" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Novo Ciclo</div>
+        <button id="btnCycleBack">Voltar para Ciclos</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Assistente de Ciclo - Passo 1/4</div>
+      <div class="muted" style="margin-bottom:10px">Selecione um ou mais ambientes existentes.</div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCycleCreateGrowStart">Criar novo ambiente</button>
+        <button id="btnCycleRefreshGrows">Atualizar ambientes</button>
+        <button id="btnCycleNextToPlants">Avancar para Plantas</button>
+      </div>
+      <div id="cycleGrowList" class="list"></div>
+      <div id="cycleWizardState" class="muted" style="margin-top:8px"></div>
+      <div id="cycleWizardMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="cycleStep2" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label">Novo Ciclo</div>
+        <button id="btnCycleStep2Back">Voltar para Ambientes</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px">Assistente de Ciclo - Passo 2/4</div>
+      <div class="muted" style="margin-bottom:10px">Selecione uma ou mais plantas para este ciclo.</div>
+      <div id="cyclePlantList" class="list"></div>
+      <div id="cyclePlantState" class="muted" style="margin-top:8px"></div>
+      <div id="cyclePlantMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="fan" class="screen">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <button id="btnBack">&larr; Voltar</button>
+      <div class="muted" id="connStatus">--</div>
+    </div>
+
+    <div class="card">
+      <div class="label"><span class="glyph">&#127788;</span>Exaustor</div>
+      <div id="fanValue" class="big">--%</div>
+      <input id="fanSlider" type="range" min="0" max="100" value="0" />
+      <div id="fanHint" class="muted" style="margin-top:10px">
+        Ajuste a velocidade (aplica ao soltar).
+      </div>
+    </div>
+
+    <div id="msg" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
