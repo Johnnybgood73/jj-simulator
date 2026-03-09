@@ -8,10 +8,10 @@
 </head>
 <body>
   <div class="bottom-nav">
-    <button class="nav-btn active" data-screen="home">Dashboard</button>
-    <button class="nav-btn" data-screen="grows">Ambientes</button>
-    <button class="nav-btn" data-screen="plants">Plantas</button>
-    <button class="nav-btn" data-screen="cycles">Ciclos</button>
+    <button class="nav-btn active" data-screen="home">&#127968; Dashboard</button>
+    <button class="nav-btn" data-screen="grows">&#127969; Ambientes</button>
+    <button class="nav-btn" data-screen="plants">&#127807; Plantas</button>
+    <button class="nav-btn" data-screen="cycles">&#10227; Cultivos</button>
   </div>
 
   <div id="home" class="screen active">
@@ -33,7 +33,7 @@
     </div>
 
     <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Modo</div>
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#9881;</span>Modo</div>
       <div class="mode-grid">
         <button class="mode-btn" id="btnModeManual" data-mode="manual">Manual</button>
         <button class="mode-btn" id="btnModeEco" data-mode="eco">Eco</button>
@@ -59,7 +59,7 @@
     <div class="card" style="margin-top:12px">
       <div class="row" style="justify-content:space-between;align-items:flex-start">
         <div>
-          <div class="label">Backend</div>
+          <div class="label"><span class="glyph">&#128187;</span>Backend</div>
           <div class="muted">Simulador local (sem ESP32)</div>
         </div>
 
@@ -77,14 +77,21 @@
   <div id="grows" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Ambientes</div>
-        <button id="btnRefreshGrows">Atualizar</button>
+        <div class="label"><span class="glyph">&#127969;</span>Ambientes</div>
+        <div class="row">
+          <button id="btnRefreshGrows" class="btn-icon" title="Atualizar lista">&#10227;</button>
+          <button id="btnGrowFormToggle">Novo ambiente</button>
+        </div>
       </div>
       <div id="growsList" class="list"></div>
+      <div id="growsMsg" class="muted" style="margin-top:8px"></div>
     </div>
 
-    <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Novo ambiente</div>
+    <div id="growFormCard" class="card" style="margin-top:12px;display:none">
+      <div class="row spread" style="margin-bottom:10px">
+        <div class="label">Novo ambiente</div>
+        <button id="btnGrowFormDiscard">Descartar</button>
+      </div>
       <div class="form-grid">
         <input id="growName" type="text" placeholder="Nome do ambiente" />
         <div id="growTypeSegment" class="segmented">
@@ -100,27 +107,26 @@
       <div class="row" style="margin-top:10px">
         <button id="btnCreateGrow">Criar ambiente</button>
       </div>
-      <div id="growsMsg" class="muted" style="margin-top:8px"></div>
     </div>
   </div>
 
   <div id="growDetail" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Detalhes do ambiente</div>
+        <div class="label"><span class="glyph">&#128269;</span>Detalhes do ambiente</div>
         <button id="btnGrowDetailBack">Voltar para Ambientes</button>
       </div>
       <div id="growDetailInfo" class="muted" style="margin-top:8px"></div>
     </div>
     <div class="card" style="margin-top:12px">
       <div class="row spread">
-        <div class="label">Plantas no ambiente</div>
+        <div class="label"><span class="glyph">&#127793;</span>Plantas no ambiente</div>
       </div>
       <div id="growPlantsList" class="list"></div>
     </div>
     <div class="card" style="margin-top:12px">
       <div class="row spread">
-        <div class="label">Equipamentos</div>
+        <div class="label"><span class="glyph">&#128295;</span>Equipamentos</div>
         <button id="btnGrowToolToggle">Adicionar equipamento</button>
       </div>
       <div id="growToolsList" class="list"></div>
@@ -218,7 +224,7 @@
   <div id="plants" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Especies</div>
+        <div class="label"><span class="glyph">&#129716;</span>Especies</div>
         <div class="row">
           <button id="btnSpeciesPanelToggle">Mostrar</button>
           <button id="btnSpeciesToggle" style="display:none">Nova especie</button>
@@ -251,99 +257,187 @@
 
     <div class="card" style="margin-top:12px">
       <div class="row spread">
-        <div class="label">Plantas</div>
-        <button id="btnRefreshPlants">Atualizar</button>
+        <div class="label"><span class="glyph">&#127807;</span>Plantas</div>
+        <div class="row">
+          <button id="btnRefreshPlants" class="btn-icon" title="Atualizar lista">&#10227;</button>
+          <button id="btnPlantFormToggle">Nova planta</button>
+        </div>
       </div>
       <div id="plantsList" class="list"></div>
+      <div id="plantsMsg" class="muted" style="margin-top:8px"></div>
     </div>
 
     <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Nova Planta</div>
+      <div class="row spread">
+        <div class="label"><span class="glyph">&#127793;</span>Sementes</div>
+        <div class="row">
+          <button id="btnRefreshSeeds" class="btn-icon" title="Atualizar lista">&#10227;</button>
+          <button id="btnSeedFormToggle">Nova semente</button>
+        </div>
+      </div>
+      <div id="seedsList" class="list"></div>
+      <div id="seedsMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+
+    <div id="seedFormHomeSlot">
+    <div id="seedFormCard" class="card" style="margin-top:12px;display:none">
+      <div class="row spread" style="margin-bottom:10px">
+        <div class="label">Nova semente</div>
+        <button id="btnSeedFormDiscard">Descartar</button>
+      </div>
       <div class="form-grid">
-        <input id="plantName" type="text" placeholder="Nome da planta" />
-        <select id="plantSpeciesId"></select>
-        <select id="plantGrow"></select>
-        <select id="plantSource">
-          <option value="semente">Origem: semente</option>
-          <option value="clone">Origem: clone</option>
-          <option value="planta_estabelecida">Origem: planta estabelecida</option>
-        </select>
-        <select id="plantPurpose">
-          <option value="colheita">Finalidade: colheita</option>
-          <option value="reproducao">Finalidade: reproducao</option>
-          <option value="mae">Finalidade: planta mae</option>
-        </select>
-        <select id="plantSex">
-          <option value="indefinido">Sexo: indefinido</option>
-          <option value="femea">Sexo: femea</option>
-          <option value="macho">Sexo: macho</option>
-          <option value="hermafrodita">Sexo: hermafrodita</option>
-        </select>
-        <select id="plantLifeState">
-          <option value="nao_germinada">Tempo de vida: nao germinada</option>
-          <option value="germinacao_iniciada">Tempo de vida: germinacao iniciada</option>
-        </select>
-        <select id="plantContainer" disabled>
-          <option value="">Recipiente/vaso</option>
-          <option value="agua">Recipiente com agua</option>
-          <option value="papel_toalha">Papel toalha</option>
-          <option value="jiffy">Celula (estilo jiffy)</option>
-          <option value="vaso_200ml">Vaso 200 ml</option>
-          <option value="vaso_500ml">Vaso 500 ml</option>
-          <option value="vaso_1l">Vaso 1 L</option>
-          <option value="vaso_3l">Vaso 3 L</option>
-          <option value="vaso_5l">Vaso 5 L</option>
-          <option value="vaso_7l">Vaso 7 L</option>
-          <option value="vaso_11l">Vaso 11 L</option>
-          <option value="vaso_15l">Vaso 15 L</option>
-          <option value="hidroponico">Hidroponico</option>
-        </select>
-        <select id="plantSoilType" disabled>
-          <option value="">Tipo de solo</option>
-          <option value="organico">Organico</option>
-          <option value="mineral">Mineral</option>
-        </select>
-        <input id="plantGermStart" type="datetime-local" />
-        <select id="plantPhotoperiod">
-          <option value="fotoperiodo">Fotoperiodo</option>
-          <option value="autoflower">Autoflorecente</option>
-        </select>
-        <details id="plantTrainingDetails" class="training-details">
-          <summary id="plantTrainingSummary">Treinamentos: indefinido</summary>
-          <div class="training-grid">
-            <label class="mini-check"><input type="checkbox" data-training="indefinido" checked /> Indefinido</label>
-            <label class="mini-check"><input type="checkbox" data-training="lst" /> LST</label>
-            <label class="mini-check"><input type="checkbox" data-training="topping" /> Topping</label>
-            <label class="mini-check"><input type="checkbox" data-training="fim" /> FIM</label>
-            <label class="mini-check"><input type="checkbox" data-training="scrog" /> SCROG</label>
-            <label class="mini-check"><input type="checkbox" data-training="sog" /> SOG</label>
-            <label class="mini-check"><input type="checkbox" data-training="supercrop" /> Supercrop</label>
-            <label class="mini-check"><input type="checkbox" data-training="mainline" /> Mainline</label>
-          </div>
-        </details>
-        <input id="plantNotes" type="text" placeholder="Observacoes (opcional)" />
+        <div class="field">
+          <label class="field-label" for="seedSpeciesId">Especie</label>
+          <select id="seedSpeciesId"></select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="seedQuantity">Quantidade</label>
+          <input id="seedQuantity" type="number" min="1" step="1" placeholder="Ex.: 5" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCreateSeed" disabled>Cadastrar sementes</button>
+      </div>
+    </div>
+    </div>
+
+    <div id="plantFormHomeSlot">
+    <div id="plantFormCard" class="card" style="margin-top:12px;display:none">
+      <div class="row spread" style="margin-bottom:10px">
+        <div id="plantFormTitle" class="label">Nova Planta</div>
+        <button id="btnPlantFormDiscard">Descartar</button>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label class="field-label" for="plantName">Nome da planta</label>
+          <input id="plantName" type="text" placeholder="Ex.: Planta 01" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantSpeciesId">Especie</label>
+          <select id="plantSpeciesId"></select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantGrow">Ambiente</label>
+          <select id="plantGrow"></select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantSource">Origem</label>
+          <select id="plantSource">
+            <option value="semente">Semente</option>
+            <option value="clone">Clone</option>
+            <option value="indefinido">Indefinido</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantPurpose">Finalidade</label>
+          <select id="plantPurpose">
+            <option value="colheita">Colheita</option>
+            <option value="reproducao">Reproducao</option>
+            <option value="mae">Planta mae</option>
+            <option value="outros">Outros</option>
+            <option value="indefinido">Indefinido</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantSex">Sexo</label>
+          <select id="plantSex">
+            <option value="indefinido">Indefinido</option>
+            <option value="femea">Femea</option>
+            <option value="macho">Macho</option>
+            <option value="hermafrodita">Hermafrodita</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantLifeState">Estado de germinacao</label>
+          <select id="plantLifeState">
+            <option value="nao_germinada">Nao germinada</option>
+            <option value="germinada">Germinada</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantGermStart">Data de referencia</label>
+          <input id="plantGermStart" type="datetime-local" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantDateUnknown">Data indefinida</label>
+          <label class="mini-check"><input id="plantDateUnknown" type="checkbox" /> Marcar data como indefinida</label>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantContainer">Recipiente/vaso</label>
+          <select id="plantContainer" disabled>
+            <option value="">Selecione</option>
+            <option value="agua">Recipiente com agua</option>
+            <option value="papel_toalha">Papel toalha</option>
+            <option value="jiffy">Celula (estilo jiffy)</option>
+            <option value="vaso_200ml">Vaso 200 ml</option>
+            <option value="vaso_500ml">Vaso 500 ml</option>
+            <option value="vaso_1l">Vaso 1 L</option>
+            <option value="vaso_3l">Vaso 3 L</option>
+            <option value="vaso_5l">Vaso 5 L</option>
+            <option value="vaso_7l">Vaso 7 L</option>
+            <option value="vaso_11l">Vaso 11 L</option>
+            <option value="vaso_15l">Vaso 15 L</option>
+            <option value="hidroponico">Hidroponico</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantSoilType">Tipo de solo</label>
+          <select id="plantSoilType" disabled>
+            <option value="">Selecione</option>
+            <option value="organico">Organico</option>
+            <option value="mineral">Mineral</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label" for="plantPhotoperiod">Tipo genetico</label>
+          <select id="plantPhotoperiod">
+            <option value="fotoperiodo">Fotoperiodo</option>
+            <option value="autoflower">Autoflorecente</option>
+            <option value="indefinido">Indefinido</option>
+          </select>
+        </div>
+        <div class="field field-span-2">
+          <label class="field-label" for="plantTrainingDetails">Treinamentos</label>
+          <details id="plantTrainingDetails" class="training-details">
+            <summary id="plantTrainingSummary">Treinamentos: indefinido</summary>
+            <div class="training-grid">
+              <label class="mini-check"><input type="checkbox" data-training="indefinido" checked /> Indefinido</label>
+              <label class="mini-check"><input type="checkbox" data-training="lst" /> LST</label>
+              <label class="mini-check"><input type="checkbox" data-training="topping" /> Topping</label>
+              <label class="mini-check"><input type="checkbox" data-training="fim" /> FIM</label>
+              <label class="mini-check"><input type="checkbox" data-training="scrog" /> SCROG</label>
+              <label class="mini-check"><input type="checkbox" data-training="sog" /> SOG</label>
+              <label class="mini-check"><input type="checkbox" data-training="supercrop" /> Supercrop</label>
+              <label class="mini-check"><input type="checkbox" data-training="mainline" /> Mainline</label>
+            </div>
+          </details>
+        </div>
+        <div class="field field-span-2">
+          <label class="field-label" for="plantNotes">Observacoes</label>
+          <input id="plantNotes" type="text" placeholder="Opcional" />
+        </div>
       </div>
       <div class="row" style="margin-top:10px">
         <button id="btnCreatePlant" disabled>Criar Planta</button>
       </div>
-      <div id="plantsMsg" class="muted" style="margin-top:8px"></div>
+    </div>
     </div>
   </div>
 
   <div id="cycles" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Ciclos</div>
+        <div class="label"><span class="glyph">&#10227;</span>Cultivos</div>
         <button id="btnRefreshCycles">Atualizar</button>
       </div>
       <div id="cyclesList" class="list"></div>
     </div>
 
     <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Novo Ciclo</div>
-      <div class="muted">Inicie o assistente guiado para criar seu ciclo por etapas.</div>
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#10133;</span>Novo Cultivo</div>
+      <div class="muted">Inicie o assistente guiado para criar seu cultivo por etapas.</div>
       <div class="row" style="margin-top:10px">
-        <button id="btnNewCycle">Criar novo ciclo</button>
+        <button id="btnNewCycle">Criar novo cultivo</button>
       </div>
       <div id="cyclesMsg" class="muted" style="margin-top:8px"></div>
     </div>
@@ -352,37 +446,156 @@
   <div id="cycleStep1" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Novo Ciclo</div>
-        <button id="btnCycleBack">Voltar para Ciclos</button>
+        <div class="label"><span class="glyph">&#128257;</span>Novo Cultivo</div>
+        <button id="btnCycleBack">Voltar para Cultivos</button>
       </div>
     </div>
     <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Assistente de Ciclo - Passo 1/4</div>
-      <div class="muted" style="margin-bottom:10px">Selecione um ou mais ambientes existentes.</div>
-      <div class="row" style="margin-top:10px">
-        <button id="btnCycleCreateGrowStart">Criar novo ambiente</button>
-        <button id="btnCycleRefreshGrows">Atualizar ambientes</button>
-        <button id="btnCycleNextToPlants">Avancar para Plantas</button>
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#129302;</span>Assistente de Cultivo - Passo 1/4</div>
+      <div class="step-block">
+        <div class="step-head"><span class="step-icon">&#9881;</span>Tipo de cultivo</div>
+        <div class="muted" style="margin-bottom:10px">Defina o objetivo principal deste cultivo.</div>
+        <div id="cyclePurposeOptions" class="phase-list">
+          <label class="mini-check phase-item"><input type="radio" name="cyclePurpose" value="colheita" /> Colheita</label>
+          <label class="mini-check phase-item"><input type="radio" name="cyclePurpose" value="reproducao" /> Reproducao</label>
+          <label class="mini-check phase-item"><input type="radio" name="cyclePurpose" value="mae" /> Planta mae</label>
+        </div>
       </div>
-      <div id="cycleGrowList" class="list"></div>
-      <div id="cycleWizardState" class="muted" style="margin-top:8px"></div>
-      <div id="cycleWizardMsg" class="muted" style="margin-top:8px"></div>
+      <div id="cycleHarvestConfigBlock" style="margin-top:10px">
+      <div class="step-block">
+        <div class="step-head"><span class="step-icon">&#8635;</span>Fases do cultivo</div>
+        <div class="muted" style="margin-bottom:10px">Escolha quais fases quer acompanhar neste cultivo.</div>
+        <div class="cycle-complete-box">
+          <label class="mini-check"><input id="cycleCompleteToggle" type="checkbox" /> Cultivo completo (4 fases)</label>
+          <div class="muted">Seleciona automaticamente Germinacao, Plantula, Vegetativo e Floracao.</div>
+        </div>
+        <div id="cyclePhaseOptions" class="phase-list" style="margin-bottom:10px">
+          <label class="mini-check phase-item"><input type="checkbox" data-cycle-phase="germinacao" /> &#8226; Germinacao</label>
+          <label class="mini-check phase-item"><input type="checkbox" data-cycle-phase="plantula" /> &#8226; Plantula</label>
+          <label class="mini-check phase-item"><input type="checkbox" data-cycle-phase="vegetativo" /> &#8226; Vegetativo</label>
+          <label class="mini-check phase-item"><input type="checkbox" data-cycle-phase="floracao" /> &#8226; Floracao</label>
+        </div>
+        <div id="cyclePhaseState" class="muted"></div>
+      </div>
+      <div class="step-block" style="margin-top:10px">
+        <div class="step-head"><span class="step-icon">&#9638;</span>Ambientes</div>
+        <div class="muted" style="margin-bottom:10px">Selecione um ou mais ambientes existentes.</div>
+        <div class="row" style="margin-top:10px">
+          <button id="btnCycleCreateGrowStart">Criar novo ambiente</button>
+          <button id="btnCycleRefreshGrows">Atualizar ambientes</button>
+        </div>
+        <div id="cycleGrowList" class="list"></div>
+        <div id="cycleWizardState" class="muted" style="margin-top:8px"></div>
+        <div id="cycleWizardMsg" class="muted" style="margin-top:8px"></div>
+      </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnCycleNextToPlants" disabled>Avancar para Pos-colheita</button>
+      </div>
     </div>
   </div>
 
   <div id="cycleStep2" class="screen">
     <div class="card">
       <div class="row spread">
-        <div class="label">Novo Ciclo</div>
-        <button id="btnCycleStep2Back">Voltar para Ambientes</button>
+        <div class="label"><span class="glyph">&#128257;</span>Novo Cultivo</div>
+        <button id="btnCycleStep2Back">Voltar para Fases/Ambientes</button>
       </div>
     </div>
     <div class="card" style="margin-top:12px">
-      <div class="label" style="margin-bottom:10px">Assistente de Ciclo - Passo 2/4</div>
-      <div class="muted" style="margin-bottom:10px">Selecione uma ou mais plantas para este ciclo.</div>
-      <div id="cyclePlantList" class="list"></div>
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#129302;</span>Assistente de Cultivo - Passo 2/4</div>
+      <div class="muted" style="margin-bottom:10px">Configuracao de pos-colheita (secagem e cura).</div>
+      <div id="cycleStep2Summary" class="muted" style="margin-bottom:10px"></div>
+      <div id="cycleNonHarvestPlaceholder" class="muted" style="margin-bottom:10px;display:none">Para este tipo de cultivo, as configuracoes das proximas etapas ainda serao implementadas.</div>
+      <div id="cyclePostHarvestGuard" class="muted" style="margin-bottom:10px;display:none"></div>
+      <div id="cyclePlantList" class="list">
+        <div id="cycleDryingBlock" class="list-item">
+          <div class="list-title">Secagem</div>
+          <div class="row">
+            <label class="mini-check"><input type="radio" name="cycleDryingEnabled" value="ativado" /> Ativado</label>
+            <label class="mini-check"><input type="radio" name="cycleDryingEnabled" value="desativado" checked /> Desativado</label>
+          </div>
+          <div id="cycleDryingOptionsWrap" style="display:none">
+            <label class="mini-check"><input type="radio" name="cycleDryingOption" value="mesmo_grow" /> Usar o mesmo ambiente selecionado</label>
+            <label class="mini-check"><input type="radio" name="cycleDryingOption" value="outro_ambiente" /> Usar outro ambiente cadastrado</label>
+            <div id="cycleDryingOtherWrap" style="display:none;padding:6px 4px">
+              <select id="cycleDryingOtherGrow"></select>
+            </div>
+            <label class="mini-check"><input type="radio" name="cycleDryingOption" value="generico" /> Ambiente generico (fora de controle do app)</label>
+          </div>
+        </div>
+        <div id="cycleCureBlock" class="list-item" style="display:none">
+          <div class="list-title">Cura</div>
+          <div class="row">
+            <label class="mini-check"><input type="radio" name="cycleCureEnabled" value="ativado" /> Ativado</label>
+            <label class="mini-check"><input type="radio" name="cycleCureEnabled" value="desativado" checked /> Desativado</label>
+          </div>
+          <div id="cycleCureOptionsWrap" style="display:none">
+            <label class="mini-check"><input type="radio" name="cycleCureOption" value="recipiente_sistema" /> Recipiente de cura (ligado ao sistema)</label>
+            <label class="mini-check"><input type="radio" name="cycleCureOption" value="generico" /> Ambiente generico</label>
+          </div>
+        </div>
+      </div>
       <div id="cyclePlantState" class="muted" style="margin-top:8px"></div>
       <div id="cyclePlantMsg" class="muted" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnCycleStep2Next">Avancar para Selecao</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cycleStep3" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label"><span class="glyph">&#128257;</span>Novo Cultivo</div>
+        <button id="btnCycleStep3Back">Voltar para Pos-colheita</button>
+      </div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#129302;</span>Assistente de Cultivo - Passo 3/4</div>
+      <div class="muted" style="margin-bottom:10px">Selecione as plantas ou sementes que farao parte deste cultivo.</div>
+      <div class="row" style="margin-bottom:10px">
+        <button id="btnCycleStep3NewPlant">Nova planta</button>
+        <button id="btnCycleStep3NewSeed">Nova semente</button>
+      </div>
+      <div id="cycleInlinePlantHost"></div>
+      <div id="cycleInlineSeedHost"></div>
+      <div id="cycleSelectionList" class="list"></div>
+      <div id="cycleSelectionState" class="muted" style="margin-top:8px"></div>
+      <div id="cycleSelectionMsg" class="muted" style="margin-top:8px"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="btnCycleStep3Next" disabled>Gerar cultivo</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cultivationDetail" class="screen">
+    <div class="card">
+      <div class="row spread">
+        <div class="label"><span class="glyph">&#127793;</span>Cultivo</div>
+        <button id="btnCultivationBack">Voltar para Cultivos</button>
+      </div>
+      <div id="cultivationDetailTitle" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#129302;</span>Revisao do Cultivo - Passo 4/4</div>
+      <div id="cultivationPhasesList" class="list"></div>
+      <div class="row" style="margin-top:10px">
+        <select id="cultivationAddPhaseSelect"></select>
+        <button id="btnCultivationAddPhase">Adicionar fase</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="btnCultivationConfirm">Confirmar cultivo</button>
+      </div>
+      <div id="cultivationReviewMsg" class="muted" style="margin-top:8px"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#128197;</span>Calendario</div>
+      <div class="muted">Visualizacoes disponiveis: Diario, Semanal e Mensal.</div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="label" style="margin-bottom:10px"><span class="glyph">&#128200;</span>Estimativa de Colheita</div>
+      <div id="cultivationEstimateInfo" class="muted">Estimativa inicial usando dados do cultivo e luz padrao do ambiente.</div>
     </div>
   </div>
 

@@ -22,6 +22,7 @@ const simState = {
     }
   ],
   plants: [],
+  seeds: [],
   species: [
     {
       id: "s1",
@@ -94,7 +95,7 @@ function nextId(prefix, items) {
   for (const item of items) {
     const id = String(item.id || "");
     if (!id.startsWith(prefix)) continue;
-    const n = Number(id.slice(1));
+    const n = Number(id.slice(prefix.length));
     if (Number.isFinite(n) && n > max) max = n;
   }
   return prefix + String(max + 1);
@@ -121,6 +122,49 @@ function nowForDatetimeLocal() {
   const h = pad(d.getHours());
   const min = pad(d.getMinutes());
   return `${y}-${m}-${day}T${h}:${min}`;
+}
+
+function parseDatetimeLocal(value) {
+  const raw = normalizeTrim(value);
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d;
+}
+
+function plantAllowsDateUnknown(sourceType, lifeState) {
+  const source = normalizeTrim(sourceType);
+  const life = normalizeTrim(lifeState);
+  if (source === "clone") return true;
+  if (source === "semente" && life === "nao_germinada") return true;
+  if (source === "indefinido" && life === "nao_germinada") return true;
+  return false;
+}
+
+function plantDateConstraint(sourceType, lifeState) {
+  const source = normalizeTrim(sourceType);
+  const life = normalizeTrim(lifeState);
+  if (life === "germinada") return "past_or_now";
+  if ((source === "semente" || source === "indefinido") && life === "nao_germinada") return "now_or_future";
+  if (source === "clone") return "any";
+  return "none";
+}
+
+function plantRequiresDate(sourceType, lifeState, dateUnknown) {
+  if (dateUnknown && plantAllowsDateUnknown(sourceType, lifeState)) return false;
+  return plantDateConstraint(sourceType, lifeState) !== "none";
+}
+
+function plantNeedsContainerData(sourceType, lifeState, referenceDate, dateUnknown) {
+  const source = normalizeTrim(sourceType);
+  const life = normalizeTrim(lifeState);
+  if (life !== "germinada") return false;
+  if (source !== "clone") return true;
+  if (dateUnknown) return false;
+  const dt = parseDatetimeLocal(referenceDate);
+  if (!dt) return false;
+  const now = new Date();
+  return dt.getTime() <= (now.getTime() + 60000);
 }
 
 function updateSensorsSim() {
@@ -262,6 +306,17 @@ function buildSpeciesPayload() {
   };
 }
 
+function buildSeedsPayload() {
+  return {
+    seeds: simState.seeds.map((s) => ({
+      id: s.id,
+      species_id: s.species_id,
+      species_name: s.species_name,
+      quantity: s.quantity
+    }))
+  };
+}
+
 function buildCyclesPayload() {
   return {
     cycles: simState.cycles.map((c) => ({
@@ -273,7 +328,12 @@ function buildCyclesPayload() {
       phase: c.phase,
       duration_veg_days: c.duration_veg_days,
       duration_flora_days: c.duration_flora_days,
-      stretch_assumed: c.stretch_assumed
+      stretch_assumed: c.stretch_assumed,
+      purpose: c.purpose || "",
+      selection_ids: Array.isArray(c.selection_ids) ? [...c.selection_ids] : [],
+      phase_plan: Array.isArray(c.phase_plan) ? c.phase_plan.map((p) => ({ ...p })) : [],
+      drying_option: c.drying_option || "nao_acompanhar",
+      cure_option: c.cure_option || "nao_acompanhar"
     }))
   };
 }
@@ -408,6 +468,13 @@ async function apiGetPlants() {
   return buildPlantsPayload();
 }
 
+async function apiGetSeeds() {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+  return buildSeedsPayload();
+}
+
 async function apiCreatePlant(
   name,
   speciesId,
@@ -417,6 +484,7 @@ async function apiCreatePlant(
   sex,
   lifeState,
   germinationStart,
+  germinationDateUnknown,
   containerType,
   soilType,
   photoperiodType,
@@ -435,6 +503,7 @@ async function apiCreatePlant(
   const plantSex = normalizeTrim(sex);
   const life = normalizeTrim(lifeState);
   const germStart = normalizeTrim(germinationStart);
+  const dateUnknown = germinationDateUnknown === true || germinationDateUnknown === "true" || germinationDateUnknown === "1" || germinationDateUnknown === 1;
   const container = normalizeTrim(containerType);
   const soil = normalizeTrim(soilType);
   const photoperiod = normalizeTrim(photoperiodType);
@@ -442,20 +511,32 @@ async function apiCreatePlant(
   let trainings = parseCsvIds(trainingCsv);
 
   if (!plantName) return { ok: false, error: "invalid_name" };
-  if (!simState.species.some((s) => s.id === spId)) return { ok: false, error: "invalid_species" };
-  if (!simState.grows.some((g) => g.id === gId)) return { ok: false, error: "invalid_grow_id" };
-  if (!["semente", "clone", "planta_estabelecida", "planta_pronta"].includes(source)) return { ok: false, error: "invalid_source_type" };
-  if (!["colheita", "reproducao", "mae"].includes(target)) return { ok: false, error: "invalid_purpose" };
+  if (!(spId === "indefinido" || simState.species.some((s) => s.id === spId))) return { ok: false, error: "invalid_species" };
+  if (!(gId === "indefinido" || simState.grows.some((g) => g.id === gId))) return { ok: false, error: "invalid_grow_id" };
+  if (!["semente", "clone", "indefinido"].includes(source)) return { ok: false, error: "invalid_source_type" };
+  if (!["colheita", "reproducao", "mae", "outros", "indefinido"].includes(target)) return { ok: false, error: "invalid_purpose" };
   if (!["femea", "macho", "indefinido", "hermafrodita"].includes(plantSex)) return { ok: false, error: "invalid_sex" };
-  if (!["nao_germinada", "germinacao_iniciada"].includes(life)) return { ok: false, error: "invalid_life_state" };
-  if (life === "germinacao_iniciada" && !germStart) return { ok: false, error: "missing_germination_start" };
+  if (!["nao_germinada", "germinada"].includes(life)) return { ok: false, error: "invalid_life_state" };
+  if (source === "clone" && life !== "germinada") return { ok: false, error: "invalid_life_state_for_source" };
+  if (dateUnknown && !plantAllowsDateUnknown(source, life)) return { ok: false, error: "invalid_date_unknown" };
+  const needsDate = plantRequiresDate(source, life, dateUnknown);
+  if (needsDate && !germStart) return { ok: false, error: "missing_reference_date" };
+  if (needsDate) {
+    const dt = parseDatetimeLocal(germStart);
+    if (!dt) return { ok: false, error: "invalid_reference_date" };
+    const now = new Date();
+    const rule = plantDateConstraint(source, life);
+    if (rule === "past_or_now" && dt.getTime() > now.getTime()) return { ok: false, error: "invalid_reference_date_range" };
+    if (rule === "now_or_future" && dt.getTime() < (now.getTime() - 60000)) return { ok: false, error: "invalid_reference_date_range" };
+  }
   const allowedContainers = [
     "agua", "papel_toalha", "jiffy", "vaso_200ml", "vaso_500ml", "vaso_1l", "vaso_3l",
     "vaso_5l", "vaso_7l", "vaso_11l", "vaso_15l", "hidroponico"
   ];
+  const needsContainer = plantNeedsContainerData(source, life, germStart, dateUnknown);
   let containerFinal = "";
   let soilFinal = "";
-  if (life === "germinacao_iniciada") {
+  if (needsContainer) {
     if (!allowedContainers.includes(container)) return { ok: false, error: "invalid_container_type" };
     containerFinal = container;
     if (plantContainerSupportsSoil(containerFinal)) {
@@ -463,7 +544,7 @@ async function apiCreatePlant(
       soilFinal = soil;
     }
   }
-  if (!["autoflower", "fotoperiodo"].includes(photoperiod)) return { ok: false, error: "invalid_photoperiod" };
+  if (!["autoflower", "fotoperiodo", "indefinido"].includes(photoperiod)) return { ok: false, error: "invalid_photoperiod" };
 
   const validTraining = new Set(["none", "indefinido", "lst", "topping", "fim", "scrog", "sog", "supercrop", "mainline"]);
   trainings = trainings.filter((t) => validTraining.has(t));
@@ -476,13 +557,14 @@ async function apiCreatePlant(
     id: nextId("p", simState.plants),
     name: plantName,
     species_id: spId,
-    species_name: speciesItem ? speciesItem.name : "",
+    species_name: spId === "indefinido" ? "Indefinido" : (speciesItem ? speciesItem.name : ""),
     grow_id: gId,
     source_type: source,
     purpose: target,
     sex: plantSex,
     life_state: life,
-    germination_start: germStart,
+    germination_start: dateUnknown ? "" : germStart,
+    germination_date_unknown: !!dateUnknown,
     container_type: containerFinal,
     soil_type: soilFinal,
     photoperiod_type: photoperiod,
@@ -501,6 +583,169 @@ async function apiDeletePlant(id) {
   const idx = simState.plants.findIndex((p) => p.id === plantId);
   if (idx < 0) return { ok: false, error: "not_found" };
   simState.plants.splice(idx, 1);
+  return { ok: true, ...buildPlantsPayload() };
+}
+
+async function apiCreateSeed(speciesId, quantity) {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+
+  const spId = normalizeTrim(speciesId);
+  const qty = Number(quantity || 0);
+  if (!(spId === "indefinido" || simState.species.some((s) => s.id === spId))) return { ok: false, error: "invalid_species" };
+  if (!Number.isFinite(qty) || qty <= 0) return { ok: false, error: "invalid_quantity" };
+
+  const speciesItem = simState.species.find((s) => s.id === spId);
+  simState.seeds.push({
+    id: nextId("sd", simState.seeds),
+    species_id: spId,
+    species_name: spId === "indefinido" ? "Indefinido" : (speciesItem ? speciesItem.name : ""),
+    quantity: Math.floor(qty)
+  });
+
+  return { ok: true, ...buildSeedsPayload() };
+}
+
+async function apiDeleteSeed(id) {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+
+  const seedId = normalizeTrim(id);
+  const idx = simState.seeds.findIndex((s) => s.id === seedId);
+  if (idx < 0) return { ok: false, error: "not_found" };
+  simState.seeds.splice(idx, 1);
+  return { ok: true, ...buildSeedsPayload() };
+}
+
+async function apiUpdatePlant(
+  id,
+  name,
+  speciesId,
+  growId,
+  sourceType,
+  purpose,
+  sex,
+  lifeState,
+  germinationStart,
+  germinationDateUnknown,
+  containerType,
+  soilType,
+  photoperiodType,
+  trainingCsv,
+  notes
+) {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+
+  const plantId = normalizeTrim(id);
+  const idx = simState.plants.findIndex((p) => p.id === plantId);
+  if (idx < 0) return { ok: false, error: "not_found" };
+
+  const plantName = normalizeTrim(name);
+  const spId = normalizeTrim(speciesId);
+  const gId = normalizeTrim(growId);
+  const source = normalizeTrim(sourceType);
+  const target = normalizeTrim(purpose);
+  const plantSex = normalizeTrim(sex);
+  const life = normalizeTrim(lifeState);
+  const germStart = normalizeTrim(germinationStart);
+  const dateUnknown = germinationDateUnknown === true || germinationDateUnknown === "true" || germinationDateUnknown === "1" || germinationDateUnknown === 1;
+  const container = normalizeTrim(containerType);
+  const soil = normalizeTrim(soilType);
+  const photoperiod = normalizeTrim(photoperiodType);
+  const plantNotes = normalizeTrim(notes);
+  let trainings = parseCsvIds(trainingCsv);
+
+  if (!plantName) return { ok: false, error: "invalid_name" };
+  if (!(spId === "indefinido" || simState.species.some((s) => s.id === spId))) return { ok: false, error: "invalid_species" };
+  if (!(gId === "indefinido" || simState.grows.some((g) => g.id === gId))) return { ok: false, error: "invalid_grow_id" };
+  if (!["semente", "clone", "indefinido"].includes(source)) return { ok: false, error: "invalid_source_type" };
+  if (!["colheita", "reproducao", "mae", "outros", "indefinido"].includes(target)) return { ok: false, error: "invalid_purpose" };
+  if (!["femea", "macho", "indefinido", "hermafrodita"].includes(plantSex)) return { ok: false, error: "invalid_sex" };
+  if (!["nao_germinada", "germinada"].includes(life)) return { ok: false, error: "invalid_life_state" };
+  if (source === "clone" && life !== "germinada") return { ok: false, error: "invalid_life_state_for_source" };
+  if (dateUnknown && !plantAllowsDateUnknown(source, life)) return { ok: false, error: "invalid_date_unknown" };
+  const needsDate = plantRequiresDate(source, life, dateUnknown);
+  if (needsDate && !germStart) return { ok: false, error: "missing_reference_date" };
+  if (needsDate) {
+    const dt = parseDatetimeLocal(germStart);
+    if (!dt) return { ok: false, error: "invalid_reference_date" };
+    const now = new Date();
+    const rule = plantDateConstraint(source, life);
+    if (rule === "past_or_now" && dt.getTime() > now.getTime()) return { ok: false, error: "invalid_reference_date_range" };
+    if (rule === "now_or_future" && dt.getTime() < (now.getTime() - 60000)) return { ok: false, error: "invalid_reference_date_range" };
+  }
+
+  const allowedContainers = [
+    "agua", "papel_toalha", "jiffy", "vaso_200ml", "vaso_500ml", "vaso_1l", "vaso_3l",
+    "vaso_5l", "vaso_7l", "vaso_11l", "vaso_15l", "hidroponico"
+  ];
+  const needsContainer = plantNeedsContainerData(source, life, germStart, dateUnknown);
+  let containerFinal = "";
+  let soilFinal = "";
+  if (needsContainer) {
+    if (!allowedContainers.includes(container)) return { ok: false, error: "invalid_container_type" };
+    containerFinal = container;
+    if (plantContainerSupportsSoil(containerFinal)) {
+      if (!["organico", "mineral"].includes(soil)) return { ok: false, error: "invalid_soil_type" };
+      soilFinal = soil;
+    }
+  }
+  if (!["autoflower", "fotoperiodo", "indefinido"].includes(photoperiod)) return { ok: false, error: "invalid_photoperiod" };
+
+  const validTraining = new Set(["none", "indefinido", "lst", "topping", "fim", "scrog", "sog", "supercrop", "mainline"]);
+  trainings = trainings.filter((t) => validTraining.has(t));
+  if (trainings.includes("none")) trainings = ["indefinido"];
+  if (trainings.includes("indefinido") && trainings.length > 1) trainings = trainings.filter((t) => t !== "indefinido");
+  if (!trainings.length) trainings = ["indefinido"];
+
+  const speciesItem = simState.species.find((s) => s.id === spId);
+  simState.plants[idx] = {
+    id: plantId,
+    name: plantName,
+    species_id: spId,
+    species_name: spId === "indefinido" ? "Indefinido" : (speciesItem ? speciesItem.name : ""),
+    grow_id: gId,
+    source_type: source,
+    purpose: target,
+    sex: plantSex,
+    life_state: life,
+    germination_start: dateUnknown ? "" : germStart,
+    germination_date_unknown: !!dateUnknown,
+    container_type: containerFinal,
+    soil_type: soilFinal,
+    photoperiod_type: photoperiod,
+    training_types: trainings,
+    notes: plantNotes
+  };
+
+  return { ok: true, ...buildPlantsPayload() };
+}
+
+async function apiDuplicatePlant(id, copies) {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+
+  const plantId = normalizeTrim(id);
+  const source = simState.plants.find((p) => p.id === plantId);
+  if (!source) return { ok: false, error: "not_found" };
+
+  const total = Number(copies || 0);
+  if (!Number.isFinite(total) || total <= 0) return { ok: false, error: "invalid_copies" };
+  const qty = Math.min(50, Math.floor(total));
+
+  for (let i = 1; i <= qty; i++) {
+    simState.plants.push({
+      ...source,
+      id: nextId("p", simState.plants),
+      name: `${source.name} (copia ${i})`
+    });
+  }
+
   return { ok: true, ...buildPlantsPayload() };
 }
 
@@ -738,7 +983,9 @@ const screens = {
   plants: document.getElementById("plants"),
   cycles: document.getElementById("cycles"),
   cycleStep1: document.getElementById("cycleStep1"),
-  cycleStep2: document.getElementById("cycleStep2")
+  cycleStep2: document.getElementById("cycleStep2"),
+  cycleStep3: document.getElementById("cycleStep3"),
+  cultivationDetail: document.getElementById("cultivationDetail")
 };
 
 const navButtons = document.querySelectorAll(".nav-btn");
@@ -779,6 +1026,9 @@ const growDepth = document.getElementById("growDepth");
 const growHeight = document.getElementById("growHeight");
 const btnCreateGrow = document.getElementById("btnCreateGrow");
 const btnRefreshGrows = document.getElementById("btnRefreshGrows");
+const btnGrowFormToggle = document.getElementById("btnGrowFormToggle");
+const growFormCard = document.getElementById("growFormCard");
+const btnGrowFormDiscard = document.getElementById("btnGrowFormDiscard");
 const growsMsg = document.getElementById("growsMsg");
 const btnGrowDetailBack = document.getElementById("btnGrowDetailBack");
 const growDetailInfo = document.getElementById("growDetailInfo");
@@ -853,6 +1103,7 @@ const plantLifeState = document.getElementById("plantLifeState");
 const plantContainer = document.getElementById("plantContainer");
 const plantSoilType = document.getElementById("plantSoilType");
 const plantGermStart = document.getElementById("plantGermStart");
+const plantDateUnknown = document.getElementById("plantDateUnknown");
 const plantPhotoperiod = document.getElementById("plantPhotoperiod");
 const plantTrainingDetails = document.getElementById("plantTrainingDetails");
 const plantTrainingSummary = document.getElementById("plantTrainingSummary");
@@ -860,7 +1111,22 @@ const plantTrainingChecks = document.querySelectorAll("#plantTrainingDetails inp
 const plantNotes = document.getElementById("plantNotes");
 const btnCreatePlant = document.getElementById("btnCreatePlant");
 const btnRefreshPlants = document.getElementById("btnRefreshPlants");
+const btnPlantFormToggle = document.getElementById("btnPlantFormToggle");
+const plantFormCard = document.getElementById("plantFormCard");
+const plantFormTitle = document.getElementById("plantFormTitle");
+const btnPlantFormDiscard = document.getElementById("btnPlantFormDiscard");
 const plantsMsg = document.getElementById("plantsMsg");
+const seedsList = document.getElementById("seedsList");
+const seedsMsg = document.getElementById("seedsMsg");
+const btnRefreshSeeds = document.getElementById("btnRefreshSeeds");
+const btnSeedFormToggle = document.getElementById("btnSeedFormToggle");
+const seedFormHomeSlot = document.getElementById("seedFormHomeSlot");
+const seedFormCard = document.getElementById("seedFormCard");
+const plantFormHomeSlot = document.getElementById("plantFormHomeSlot");
+const btnSeedFormDiscard = document.getElementById("btnSeedFormDiscard");
+const seedSpeciesId = document.getElementById("seedSpeciesId");
+const seedQuantity = document.getElementById("seedQuantity");
+const btnCreateSeed = document.getElementById("btnCreateSeed");
 const cyclesList = document.getElementById("cyclesList");
 const btnRefreshCycles = document.getElementById("btnRefreshCycles");
 const btnNewCycle = document.getElementById("btnNewCycle");
@@ -869,28 +1135,81 @@ const btnCycleBack = document.getElementById("btnCycleBack");
 const btnCycleCreateGrowStart = document.getElementById("btnCycleCreateGrowStart");
 const btnCycleRefreshGrows = document.getElementById("btnCycleRefreshGrows");
 const btnCycleNextToPlants = document.getElementById("btnCycleNextToPlants");
+const cyclePurposeOptions = document.querySelectorAll("input[name='cyclePurpose']");
+const cycleHarvestConfigBlock = document.getElementById("cycleHarvestConfigBlock");
+const cyclePhaseChecks = document.querySelectorAll("#cyclePhaseOptions input[data-cycle-phase]");
+const cycleCompleteToggle = document.getElementById("cycleCompleteToggle");
+const cyclePhaseState = document.getElementById("cyclePhaseState");
 const cycleGrowList = document.getElementById("cycleGrowList");
 const cycleWizardState = document.getElementById("cycleWizardState");
 const cycleWizardMsg = document.getElementById("cycleWizardMsg");
 const btnCycleStep2Back = document.getElementById("btnCycleStep2Back");
+const btnCycleStep2Next = document.getElementById("btnCycleStep2Next");
 const cyclePlantList = document.getElementById("cyclePlantList");
 const cyclePlantState = document.getElementById("cyclePlantState");
 const cyclePlantMsg = document.getElementById("cyclePlantMsg");
+const btnCycleStep3Back = document.getElementById("btnCycleStep3Back");
+const btnCycleStep3Next = document.getElementById("btnCycleStep3Next");
+const btnCycleStep3NewPlant = document.getElementById("btnCycleStep3NewPlant");
+const btnCycleStep3NewSeed = document.getElementById("btnCycleStep3NewSeed");
+const cycleInlinePlantHost = document.getElementById("cycleInlinePlantHost");
+const cycleInlineSeedHost = document.getElementById("cycleInlineSeedHost");
+const cycleSelectionList = document.getElementById("cycleSelectionList");
+const cycleSelectionState = document.getElementById("cycleSelectionState");
+const cycleSelectionMsg = document.getElementById("cycleSelectionMsg");
+const btnCultivationBack = document.getElementById("btnCultivationBack");
+const cultivationDetailTitle = document.getElementById("cultivationDetailTitle");
+const cultivationPhasesList = document.getElementById("cultivationPhasesList");
+const cultivationAddPhaseSelect = document.getElementById("cultivationAddPhaseSelect");
+const btnCultivationAddPhase = document.getElementById("btnCultivationAddPhase");
+const btnCultivationConfirm = document.getElementById("btnCultivationConfirm");
+const cultivationReviewMsg = document.getElementById("cultivationReviewMsg");
+const cultivationEstimateInfo = document.getElementById("cultivationEstimateInfo");
+const cycleStep2Summary = document.getElementById("cycleStep2Summary");
+const cycleNonHarvestPlaceholder = document.getElementById("cycleNonHarvestPlaceholder");
+const cyclePostHarvestGuard = document.getElementById("cyclePostHarvestGuard");
+const cycleDryingBlock = document.getElementById("cycleDryingBlock");
+const cycleDryingOptions = document.querySelectorAll("input[name='cycleDryingOption']");
+const cycleDryingEnabledOptions = document.querySelectorAll("input[name='cycleDryingEnabled']");
+const cycleDryingOptionsWrap = document.getElementById("cycleDryingOptionsWrap");
+const cycleDryingOtherWrap = document.getElementById("cycleDryingOtherWrap");
+const cycleDryingOtherGrow = document.getElementById("cycleDryingOtherGrow");
+const cycleCureBlock = document.getElementById("cycleCureBlock");
+const cycleCureEnabledOptions = document.querySelectorAll("input[name='cycleCureEnabled']");
+const cycleCureOptionsWrap = document.getElementById("cycleCureOptionsWrap");
+const cycleCureOptions = document.querySelectorAll("input[name='cycleCureOption']");
 
 let lastApplied = null;
 let currentMode = "MANUAL";
 let currentAutoState = "DEFAULT";
 let growsCache = [];
 let plantsCache = [];
+let seedsCache = [];
 let speciesCache = [];
 let cyclesCache = [];
 let activeGrowId = "";
-let cycleDraft = { grow_ids: [], plant_ids: [] };
+const defaultCyclePhaseIds = ["germinacao", "plantula", "vegetativo", "floracao"];
+
+let cycleDraft = {
+  purpose: "",
+  phase_ids: [],
+  grow_ids: [],
+  selection_ids: [],
+  drying_option: "nao_acompanhar",
+  drying_grow_id: "",
+  cure_option: "nao_acompanhar"
+};
 let cycleCreateFlowActive = false;
 let currentGrowDetailId = "";
+let currentCultivationId = "";
 let editingGrowToolId = "";
+let growFormVisible = false;
 let expandedSpeciesId = "";
+let expandedPlantId = "";
 let speciesPanelExpanded = false;
+let plantFormMode = "hidden";
+let editingPlantId = "";
+let seedFormVisible = false;
 
 function loadCycleDraft() {
   try {
@@ -898,15 +1217,21 @@ function loadCycleDraft() {
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object") {
-      if (Array.isArray(parsed.grow_ids)) {
-        const growIds = parsed.grow_ids.map((id) => String(id)).filter((id) => id);
-        const plantIds = Array.isArray(parsed.plant_ids) ? parsed.plant_ids.map((id) => String(id)).filter((id) => id) : [];
-        cycleDraft = { grow_ids: growIds, plant_ids: plantIds };
-        return;
-      }
-      if (parsed.grow_id) {
-        cycleDraft = { grow_ids: [String(parsed.grow_id)], plant_ids: [] };
-      }
+      const growIds = Array.isArray(parsed.grow_ids)
+        ? parsed.grow_ids.map((id) => String(id)).filter((id) => id)
+        : (parsed.grow_id ? [String(parsed.grow_id)] : []);
+      const phaseIds = Array.isArray(parsed.phase_ids)
+        ? parsed.phase_ids.map((id) => String(id)).filter((id) => id)
+        : [];
+      cycleDraft = {
+        purpose: String(parsed.purpose || ""),
+        phase_ids: phaseIds,
+        grow_ids: growIds,
+        selection_ids: Array.isArray(parsed.selection_ids) ? parsed.selection_ids.map((id) => String(id)).filter((id) => id) : [],
+        drying_option: String(parsed.drying_option || "nao_acompanhar"),
+        drying_grow_id: String(parsed.drying_grow_id || ""),
+        cure_option: String(parsed.cure_option || "nao_acompanhar")
+      };
     }
   } catch (_) {}
 }
@@ -965,6 +1290,23 @@ function setGrowType(type) {
   renderSubtypeOptions();
 }
 
+function resetGrowFormFields() {
+  growName.value = "";
+  growWidth.value = "";
+  growDepth.value = "";
+  growHeight.value = "";
+  setGrowType("indoor");
+}
+
+function setGrowFormVisible(visible) {
+  growFormVisible = !!visible;
+  growFormCard.style.display = growFormVisible ? "block" : "none";
+  btnGrowFormToggle.textContent = growFormVisible ? "Descartar" : "Novo ambiente";
+  if (!growFormVisible) {
+    resetGrowFormFields();
+  }
+}
+
 function currentGrowSubtypeMap() {
   return loadGrowSubtypes();
 }
@@ -977,14 +1319,38 @@ function setNavActive(screenName) {
   navButtons.forEach((b) => b.classList.toggle("active", b.dataset.screen === screenName));
 }
 
+function restoreInlinePlantSeedForms() {
+  if (plantFormCard && plantFormHomeSlot && plantFormCard.parentElement !== plantFormHomeSlot) {
+    plantFormHomeSlot.appendChild(plantFormCard);
+  }
+  if (seedFormCard && seedFormHomeSlot && seedFormCard.parentElement !== seedFormHomeSlot) {
+    seedFormHomeSlot.appendChild(seedFormCard);
+  }
+}
+
+function mountPlantFormInCycleStep3() {
+  if (!cycleInlinePlantHost || !plantFormCard) return;
+  restoreInlinePlantSeedForms();
+  cycleInlinePlantHost.appendChild(plantFormCard);
+}
+
+function mountSeedFormInCycleStep3() {
+  if (!cycleInlineSeedHost || !seedFormCard) return;
+  restoreInlinePlantSeedForms();
+  cycleInlineSeedHost.appendChild(seedFormCard);
+}
+
 function show(screenName) {
+  if (screenName !== "cycleStep3") {
+    restoreInlinePlantSeedForms();
+  }
   for (const k in screens) screens[k].classList.remove("active");
   screens[screenName].classList.add("active");
   setNavActive(
     screenName === "fan" ? "home"
-      : ((screenName === "cycleStep1" || screenName === "cycleStep2")
+      : ((screenName === "cycleStep1" || screenName === "cycleStep2" || screenName === "cycleStep3")
         ? "cycles"
-        : (screenName === "growDetail" ? "grows" : screenName))
+        : (screenName === "growDetail" ? "grows" : (screenName === "cultivationDetail" ? "cycles" : screenName)))
   );
 }
 
@@ -1087,6 +1453,10 @@ function renderGrows() {
   }
 
   plantGrow.innerHTML = "";
+  const growIndef = document.createElement("option");
+  growIndef.value = "indefinido";
+  growIndef.textContent = "Indefinido";
+  plantGrow.appendChild(growIndef);
   for (const g of growsCache) {
     const opt = document.createElement("option");
     opt.value = g.id;
@@ -1105,11 +1475,12 @@ function renderPlants() {
 
   plantsList.innerHTML = "";
   for (const p of plantsCache) {
-    const growName = growsCache.find((g) => g.id === p.grow_id)?.name || p.grow_id;
-    const sourceLabel = ({ semente: "Semente", clone: "Clone", planta_estabelecida: "Planta estabelecida", planta_pronta: "Planta estabelecida" })[p.source_type] || p.source_type || "--";
-    const purposeLabel = ({ colheita: "Colheita", reproducao: "Reproducao", mae: "Planta mae" })[p.purpose] || p.purpose || "--";
+    const isExpanded = expandedPlantId === p.id;
+    const growName = p.grow_id === "indefinido" ? "Indefinido" : (growsCache.find((g) => g.id === p.grow_id)?.name || p.grow_id);
+    const sourceLabel = ({ semente: "Semente", clone: "Clone", indefinido: "Indefinido" })[p.source_type] || p.source_type || "--";
+    const purposeLabel = ({ colheita: "Colheita", reproducao: "Reproducao", mae: "Planta mae", outros: "Outros", indefinido: "Indefinido" })[p.purpose] || p.purpose || "--";
     const sexLabel = ({ femea: "Femea", macho: "Macho", indefinido: "Indefinido", hermafrodita: "Hermafrodita" })[p.sex] || p.sex || "--";
-    const lifeLabel = ({ nao_germinada: "Nao germinada", germinacao_iniciada: "Germinacao iniciada" })[p.life_state] || p.life_state || "--";
+    const lifeLabel = ({ nao_germinada: "Nao germinada", germinada: "Germinada" })[p.life_state] || p.life_state || "--";
     const containerLabel = ({
       agua: "Recipiente com agua",
       papel_toalha: "Papel toalha",
@@ -1125,7 +1496,8 @@ function renderPlants() {
       hidroponico: "Hidroponico"
     })[p.container_type] || "--";
     const soilLabel = ({ organico: "Organico", mineral: "Mineral" })[p.soil_type] || "--";
-    const photoperiodLabel = ({ autoflower: "Autoflorecente", fotoperiodo: "Fotoperiodo" })[p.photoperiod_type] || p.photoperiod_type || "--";
+    const photoperiodLabel = ({ autoflower: "Autoflorecente", fotoperiodo: "Fotoperiodo", indefinido: "Indefinido" })[p.photoperiod_type] || p.photoperiod_type || "--";
+    const dateLabel = p.germination_date_unknown ? "Data indefinida" : (p.germination_start || "--");
     const trainingNames = {
       indefinido: "Indefinido",
       lst: "LST",
@@ -1141,17 +1513,22 @@ function renderPlants() {
       : "Sem treinamento";
     const item = document.createElement("div");
     item.className = "list-item";
+    item.setAttribute("data-plant-item", p.id);
     item.innerHTML = `
-      <div class="list-title">${p.name}</div>
-      <div class="muted">Especie: ${p.species_name || "--"} | Ambiente: ${growName}</div>
-      <div class="muted">${sourceLabel} | ${purposeLabel} | ${sexLabel}</div>
-      <div class="muted">${lifeLabel} ${p.germination_start ? `(${p.germination_start})` : ""} | ${photoperiodLabel}</div>
-      <div class="muted">Recipiente: ${containerLabel}${p.soil_type ? ` | Solo: ${soilLabel}` : ""}</div>
-      <div class="muted">Treinamento: ${trainings}</div>
-      ${p.notes ? `<div class="muted">Obs: ${p.notes}</div>` : ""}
-      <div class="list-actions">
-        <button data-plant-delete="${p.id}">Excluir</button>
-      </div>
+      <div class="list-title">${p.name} ${isExpanded ? "(aberto)" : ""}</div>
+      <div class="muted">Ambiente: ${growName} | Finalidade: ${purposeLabel}</div>
+      ${isExpanded ? `
+        <div class="muted">Especie: ${p.species_name || "--"} | ${sourceLabel} | ${sexLabel}</div>
+        <div class="muted">${lifeLabel} | Data: ${dateLabel} | ${photoperiodLabel}</div>
+        <div class="muted">Recipiente: ${containerLabel}${p.soil_type ? ` | Solo: ${soilLabel}` : ""}</div>
+        <div class="muted">Treinamento: ${trainings}</div>
+        ${p.notes ? `<div class="muted">Obs: ${p.notes}</div>` : ""}
+        <div class="list-actions">
+          <button data-plant-duplicate="${p.id}">Duplicar</button>
+          <button data-plant-edit="${p.id}">Editar</button>
+          <button data-plant-delete="${p.id}">Excluir</button>
+        </div>
+      ` : ""}
     `;
     plantsList.appendChild(item);
   }
@@ -1171,6 +1548,7 @@ function renderSpecies() {
     item.setAttribute("data-species-item", s.id);
     item.innerHTML = `
       <div class="list-title">${s.name} ${isExpanded ? "(aberto)" : ""}</div>
+      <div class="muted">THC/CBD: ${s.thc_pct}% / ${s.cbd_pct}% | Rendimento IN: ${s.expected_yield_indoor_g_m2} g/m2</div>
       ${isExpanded ? `
         <div class="kpi-grid">
           <div class="kpi">Veg: ${s.avg_veg_days} dias</div>
@@ -1201,12 +1579,152 @@ function setSpeciesPanelExpanded(expanded) {
 
 function renderSpeciesOptions() {
   plantSpeciesId.innerHTML = "";
+  seedSpeciesId.innerHTML = "";
+  const optIndef = document.createElement("option");
+  optIndef.value = "indefinido";
+  optIndef.textContent = "Indefinido";
+  plantSpeciesId.appendChild(optIndef);
+  const seedOptIndef = document.createElement("option");
+  seedOptIndef.value = "indefinido";
+  seedOptIndef.textContent = "Indefinido";
+  seedSpeciesId.appendChild(seedOptIndef);
   for (const s of speciesCache) {
     const opt = document.createElement("option");
     opt.value = s.id;
     opt.textContent = `${s.name} (${s.id})`;
     plantSpeciesId.appendChild(opt);
+    const seedOpt = document.createElement("option");
+    seedOpt.value = s.id;
+    seedOpt.textContent = `${s.name} (${s.id})`;
+    seedSpeciesId.appendChild(seedOpt);
   }
+}
+
+function renderSeeds() {
+  if (!seedsCache.length) {
+    seedsList.innerHTML = '<div class="muted">Nenhuma semente cadastrada.</div>';
+    return;
+  }
+
+  seedsList.innerHTML = "";
+  for (const s of seedsCache) {
+    const item = document.createElement("div");
+    item.className = "list-item";
+    item.innerHTML = `
+      <div class="list-title">${s.species_name || "Indefinido"}</div>
+      <div class="muted">Quantidade: ${s.quantity}</div>
+      <div class="list-actions">
+        <button data-seed-delete="${s.id}">Excluir</button>
+      </div>
+    `;
+    seedsList.appendChild(item);
+  }
+}
+
+function updateCreateSeedButtonState() {
+  const hasSpecies = Boolean(normalizeTrim(seedSpeciesId.value));
+  const qty = Number(seedQuantity.value || 0);
+  btnCreateSeed.disabled = !(seedFormVisible && hasSpecies && Number.isFinite(qty) && qty > 0);
+}
+
+function resetSeedFormFields() {
+  seedSpeciesId.value = "indefinido";
+  seedQuantity.value = "";
+  updateCreateSeedButtonState();
+}
+
+function setSeedFormVisible(visible) {
+  seedFormVisible = !!visible;
+  seedFormCard.style.display = seedFormVisible ? "block" : "none";
+  btnSeedFormToggle.textContent = seedFormVisible ? "Descartar" : "Nova semente";
+  if (!seedFormVisible) {
+    resetSeedFormFields();
+  } else {
+    updateCreateSeedButtonState();
+  }
+}
+
+function findPlantById(id) {
+  return plantsCache.find((p) => p.id === id) || null;
+}
+
+function resetPlantFormFields() {
+  plantName.value = "";
+  plantSource.value = "semente";
+  plantPurpose.value = "colheita";
+  plantSex.value = "indefinido";
+  plantLifeState.value = "nao_germinada";
+  plantDateUnknown.checked = false;
+  plantGermStart.value = "";
+  plantContainer.value = "";
+  plantSoilType.value = "";
+  plantPhotoperiod.value = "fotoperiodo";
+  setSelectedTrainings(["indefinido"]);
+  updateTrainingSummary();
+  plantTrainingDetails.open = false;
+  plantNotes.value = "";
+  syncPlantSourceConstraints();
+  syncPlantLifeState();
+  updateCreatePlantButtonState();
+}
+
+function fillPlantFormFromItem(plant) {
+  if (!plant) return;
+  plantName.value = plant.name || "";
+  plantSpeciesId.value = plant.species_id || "indefinido";
+  if (!plantSpeciesId.value) plantSpeciesId.value = "indefinido";
+  plantGrow.value = plant.grow_id || "indefinido";
+  if (!plantGrow.value) plantGrow.value = "indefinido";
+  plantSource.value = plant.source_type || "indefinido";
+  plantPurpose.value = plant.purpose || "indefinido";
+  plantSex.value = plant.sex || "indefinido";
+  plantLifeState.value = plant.life_state || "nao_germinada";
+  plantDateUnknown.checked = !!plant.germination_date_unknown;
+  plantGermStart.value = plant.germination_start || "";
+  plantContainer.value = plant.container_type || "";
+  plantSoilType.value = plant.soil_type || "";
+  plantPhotoperiod.value = plant.photoperiod_type || "indefinido";
+  setSelectedTrainings(Array.isArray(plant.training_types) && plant.training_types.length ? plant.training_types : ["indefinido"]);
+  updateTrainingSummary();
+  plantNotes.value = plant.notes || "";
+  syncPlantSourceConstraints();
+  syncPlantLifeState();
+  updateCreatePlantButtonState();
+}
+
+function setPlantFormMode(mode, plant) {
+  plantFormMode = mode;
+  const visible = mode !== "hidden";
+  plantFormCard.style.display = visible ? "block" : "none";
+  btnPlantFormToggle.textContent = visible ? "Descartar" : "Nova planta";
+
+  if (!visible) {
+    editingPlantId = "";
+    plantFormTitle.textContent = "Nova Planta";
+    btnCreatePlant.textContent = "Criar Planta";
+    btnCreatePlant.disabled = true;
+    return;
+  }
+
+  plantsMsg.textContent = "";
+
+  if (mode === "edit" && plant) {
+    editingPlantId = plant.id;
+    plantFormTitle.textContent = "Editar planta";
+    btnCreatePlant.textContent = "Confirmar alteracoes";
+    fillPlantFormFromItem(plant);
+    return;
+  }
+
+  editingPlantId = "";
+  plantFormTitle.textContent = "Nova Planta";
+  btnCreatePlant.textContent = "Criar Planta";
+  resetPlantFormFields();
+}
+
+function discardPlantForm() {
+  resetPlantFormFields();
+  setPlantFormMode("hidden");
 }
 
 function getSelectedTrainings() {
@@ -1264,7 +1782,7 @@ function updateTrainingSummary() {
 
 function syncPlantSourceConstraints() {
   const nonGermOption = plantLifeState.querySelector('option[value="nao_germinada"]');
-  const mustBeGerminated = plantSource.value !== "semente";
+  const mustBeGerminated = plantSource.value === "clone";
 
   if (nonGermOption) {
     nonGermOption.hidden = mustBeGerminated;
@@ -1272,7 +1790,7 @@ function syncPlantSourceConstraints() {
   }
 
   if (mustBeGerminated) {
-    plantLifeState.value = "germinacao_iniciada";
+    plantLifeState.value = "germinada";
     plantLifeState.disabled = true;
   } else {
     plantLifeState.disabled = false;
@@ -1280,15 +1798,56 @@ function syncPlantSourceConstraints() {
   }
 }
 
-function syncPlantLifeState() {
-  const needsDate = plantLifeState.value === "germinacao_iniciada";
+function syncPlantDateRules() {
+  const source = normalizeTrim(plantSource.value);
+  const life = normalizeTrim(plantLifeState.value);
+  const allowDateUnknown = plantAllowsDateUnknown(source, life);
+
+  plantDateUnknown.disabled = !allowDateUnknown;
+  if (!allowDateUnknown) plantDateUnknown.checked = false;
+
+  const dateUnknown = plantDateUnknown.checked && allowDateUnknown;
+  const needsDate = plantRequiresDate(source, life, dateUnknown);
+  const now = nowForDatetimeLocal();
+  const rule = plantDateConstraint(source, life);
+
   plantGermStart.disabled = !needsDate;
-  if (needsDate && !plantGermStart.value) {
-    plantGermStart.value = nowForDatetimeLocal();
+  if (needsDate) {
+    plantGermStart.min = (rule === "now_or_future") ? now : "";
+    plantGermStart.max = (rule === "past_or_now") ? now : "";
+    if (!plantGermStart.value) {
+      plantGermStart.value = now;
+    } else {
+      const dateValue = parseDatetimeLocal(plantGermStart.value);
+      const nowDate = parseDatetimeLocal(now);
+      if (dateValue && nowDate) {
+        if (rule === "past_or_now" && dateValue.getTime() > nowDate.getTime()) {
+          plantGermStart.value = now;
+        }
+        if (rule === "now_or_future" && dateValue.getTime() < nowDate.getTime()) {
+          plantGermStart.value = now;
+        }
+      }
+    }
+  } else {
+    plantGermStart.min = "";
+    plantGermStart.max = "";
+    plantGermStart.value = "";
   }
-  if (!needsDate) plantGermStart.value = "";
-  plantContainer.disabled = !needsDate;
-  if (!needsDate) {
+}
+
+function syncPlantLifeState() {
+  syncPlantDateRules();
+  const dateUnknown = plantDateUnknown.checked && !plantDateUnknown.disabled;
+  const needsContainerData = plantNeedsContainerData(
+    plantSource.value,
+    plantLifeState.value,
+    plantGermStart.value,
+    dateUnknown
+  );
+
+  plantContainer.disabled = !needsContainerData;
+  if (!needsContainerData) {
     plantContainer.value = "";
     plantSoilType.value = "";
     plantSoilType.disabled = true;
@@ -1307,6 +1866,11 @@ function syncPlantContainerSoil() {
 }
 
 function updateCreatePlantButtonState() {
+  if (plantFormMode === "hidden") {
+    btnCreatePlant.disabled = true;
+    return;
+  }
+
   const hasName = Boolean(normalizeTrim(plantName.value));
   const hasSpecies = Boolean(normalizeTrim(plantSpeciesId.value));
   const hasGrow = Boolean(normalizeTrim(plantGrow.value));
@@ -1315,11 +1879,19 @@ function updateCreatePlantButtonState() {
   const hasSex = Boolean(normalizeTrim(plantSex.value));
   const hasLife = Boolean(normalizeTrim(plantLifeState.value));
   const hasPhotoperiod = Boolean(normalizeTrim(plantPhotoperiod.value));
+  const dateUnknown = plantDateUnknown.checked && !plantDateUnknown.disabled;
 
-  const needsGermData = plantLifeState.value === "germinacao_iniciada";
-  const hasGermStart = !needsGermData || Boolean(normalizeTrim(plantGermStart.value));
-  const hasContainer = !needsGermData || Boolean(normalizeTrim(plantContainer.value));
-  const needsSoil = needsGermData && plantContainerSupportsSoil(plantContainer.value);
+  const needsDate = plantRequiresDate(plantSource.value, plantLifeState.value, dateUnknown);
+  const hasGermStart = !needsDate || Boolean(normalizeTrim(plantGermStart.value));
+
+  const needsContainerData = plantNeedsContainerData(
+    plantSource.value,
+    plantLifeState.value,
+    plantGermStart.value,
+    dateUnknown
+  );
+  const hasContainer = !needsContainerData || Boolean(normalizeTrim(plantContainer.value));
+  const needsSoil = needsContainerData && plantContainerSupportsSoil(plantContainer.value);
   const hasSoil = !needsSoil || Boolean(normalizeTrim(plantSoilType.value));
   const hasTraining = getSelectedTrainings().length > 0;
 
@@ -1330,7 +1902,7 @@ function updateCreatePlantButtonState() {
 
 function renderCycles() {
   if (!cyclesCache.length) {
-    cyclesList.innerHTML = '<div class="muted">Nenhum ciclo cadastrado.</div>';
+    cyclesList.innerHTML = '<div class="muted">Nenhum cultivo cadastrado.</div>';
     return;
   }
 
@@ -1341,11 +1913,133 @@ function renderCycles() {
     item.className = "list-item";
     item.innerHTML = `
       <div class="list-title">${c.name}</div>
-      <div class="muted">ID: ${c.id} | Ambiente: ${c.grow_id || "--"} | Plantas: ${plants.length} | Fase: ${c.phase || "--"}</div>
+      <div class="muted">ID: ${c.id} | Ambiente: ${c.grow_id || "--"} | Selecoes: ${plants.length} | Etapa: ${c.phase || "--"}</div>
       <div class="muted">Inicio: ${c.start_datetime || "--"}</div>
+      <div class="list-actions">
+        <button data-cultivation-open="${c.id}">Abrir</button>
+      </div>
     `;
     cyclesList.appendChild(item);
   }
+}
+
+function findCultivationById(id) {
+  return cyclesCache.find((c) => c.id === id) || null;
+}
+
+function findCultivationInState(id) {
+  return simState.cycles.find((c) => c.id === id) || null;
+}
+
+function cultivationPhaseCatalog() {
+  return {
+    germinacao: { label: "Germinacao", days: 4 },
+    plantula: { label: "Plantula", days: 10 },
+    vegetativo: { label: "Vegetativo", days: 35 },
+    floracao: { label: "Floracao", days: 63 },
+    secagem: { label: "Secagem", days: 10 },
+    cura: { label: "Cura", days: 20 }
+  };
+}
+
+async function apiGenerateCultivationFromDraft(draft) {
+  await sleep(simState.latency_ms);
+  if (simState.fail_mode) throw new Error("simulated failure");
+  if (!simState.online) throw new Error("offline");
+
+  const purpose = normalizeTrim(draft?.purpose);
+  if (!purpose) return { ok: false, error: "invalid_purpose" };
+
+  const selectedPhases = Array.isArray(draft?.phase_ids) ? draft.phase_ids : [];
+  const selectedGrows = Array.isArray(draft?.grow_ids) ? draft.grow_ids : [];
+  const selections = Array.isArray(draft?.selection_ids) ? draft.selection_ids : [];
+  if (purpose === "colheita" && (!selectedPhases.length || !selectedGrows.length || !selections.length)) {
+    return { ok: false, error: "missing_required_data" };
+  }
+
+  const phaseDefaults = cultivationPhaseCatalog();
+  const phaseOrder = ["germinacao", "plantula", "vegetativo", "floracao"];
+  const phasePlan = [];
+  for (const key of phaseOrder) {
+    if (selectedPhases.includes(key)) phasePlan.push({ key, ...phaseDefaults[key] });
+  }
+  if (draft?.drying_option && draft.drying_option !== "nao_acompanhar") {
+    phasePlan.push({ key: "secagem", label: "Secagem", days: 10 });
+  }
+  if (draft?.cure_option && draft.cure_option !== "nao_acompanhar") {
+    phasePlan.push({ key: "cura", label: "Cura", days: 20 });
+  }
+
+  const growId = selectedGrows[0] || "";
+  const plantIds = selections.filter((s) => s.startsWith("plant:")).map((s) => s.slice(6));
+  const startDate = nowForDatetimeLocal();
+  const name = `Cultivo ${simState.cycles.length + 1}`;
+  const item = {
+    id: nextId("c", simState.cycles),
+    name,
+    grow_id: growId,
+    plant_ids: plantIds,
+    start_datetime: startDate,
+    phase: phasePlan.length ? phasePlan[0].label : "PLANNED",
+    duration_veg_days: 35,
+    duration_flora_days: 63,
+    stretch_assumed: true,
+    purpose,
+    selection_ids: selections,
+    phase_plan: phasePlan,
+    drying_option: draft?.drying_option || "nao_acompanhar",
+    cure_option: draft?.cure_option || "nao_acompanhar"
+  };
+  simState.cycles.push(item);
+  return { ok: true, cultivation_id: item.id, ...buildCyclesPayload() };
+}
+
+function renderCultivationDetail() {
+  const cultivation = findCultivationById(currentCultivationId);
+  if (!cultivation) {
+    cultivationDetailTitle.textContent = "Cultivo nao encontrado.";
+    cultivationPhasesList.innerHTML = "";
+    return;
+  }
+
+  cultivationDetailTitle.textContent = `${cultivation.name} | Objetivo: ${cultivation.purpose || "--"} | Inicio: ${cultivation.start_datetime || "--"}`;
+  const phasePlan = Array.isArray(cultivation.phase_plan) ? cultivation.phase_plan : [];
+  if (!phasePlan.length) {
+    cultivationPhasesList.innerHTML = '<div class="muted">Nenhuma fase definida.</div>';
+  } else {
+    cultivationPhasesList.innerHTML = "";
+    phasePlan.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "list-item";
+      row.innerHTML = `
+        <div class="list-title">${p.label}</div>
+        <div class="row">
+          <input data-cultivation-phase-days="${p.key}" type="number" min="1" step="1" value="${p.days}" style="max-width:110px" />
+          <div class="muted">dias</div>
+          <button data-cultivation-phase-remove="${p.key}">Remover</button>
+        </div>
+      `;
+      cultivationPhasesList.appendChild(row);
+    });
+  }
+  cultivationReviewMsg.textContent = "Cultivo criado automaticamente. Agora voce pode ajustar fases e duracoes nas proximas iteracoes.";
+
+  const catalog = cultivationPhaseCatalog();
+  const used = new Set(phasePlan.map((p) => p.key));
+  cultivationAddPhaseSelect.innerHTML = "";
+  Object.keys(catalog).forEach((key) => {
+    if (used.has(key)) return;
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = catalog[key].label;
+    cultivationAddPhaseSelect.appendChild(opt);
+  });
+  btnCultivationAddPhase.disabled = cultivationAddPhaseSelect.options.length === 0;
+
+  const hasLight = Boolean(currentGrowToolsMap()[cultivation.grow_id]?.some((t) => t.kind === "light"));
+  cultivationEstimateInfo.textContent = hasLight
+    ? "Estimativa de colheita considerando luz configurada no ambiente."
+    : "Estimativa de colheita usando luz padrao (ambiente ainda sem luminaria definida).";
 }
 
 function findGrowById(id) {
@@ -1625,29 +2319,68 @@ function findPlantName(id) {
 }
 
 function refreshCycleWizardState() {
+  const purpose = cycleDraft.purpose || "";
+  if (cyclePurposeOptions.length) {
+    cyclePurposeOptions.forEach((radio) => {
+      radio.checked = radio.value === purpose;
+    });
+  }
+  if (cycleHarvestConfigBlock) {
+    cycleHarvestConfigBlock.style.display = (purpose === "colheita") ? "block" : "none";
+  }
+
+  applyCyclePhaseSelectionToUI();
+  const phaseLabels = {
+    germinacao: "Germinacao",
+    plantula: "Plantula",
+    vegetativo: "Vegetativo",
+    floracao: "Floracao"
+  };
+  const phases = (cycleDraft.phase_ids || []).map((id) => phaseLabels[id] || id);
+  cyclePhaseState.textContent = phases.length
+    ? `Fases selecionadas (${phases.length}): ${phases.join(", ")}`
+    : "Fases selecionadas: nenhuma";
+
   if (!cycleDraft.grow_ids.length) {
     cycleWizardState.textContent = "Ambientes selecionados: nenhum";
-    btnCycleNextToPlants.disabled = true;
-    return;
+  } else {
+    const labels = cycleDraft.grow_ids.map((id) => {
+      const name = findGrowName(id);
+      return name ? `${name} (${id})` : id;
+    });
+    cycleWizardState.textContent = `Ambientes selecionados (${cycleDraft.grow_ids.length}): ${labels.join(", ")}`;
   }
-  const labels = cycleDraft.grow_ids.map((id) => {
-    const name = findGrowName(id);
-    return name ? `${name} (${id})` : id;
-  });
-  cycleWizardState.textContent = `Ambientes selecionados (${cycleDraft.grow_ids.length}): ${labels.join(", ")}`;
-  btnCycleNextToPlants.disabled = false;
+
+  if (purpose === "colheita") {
+    btnCycleNextToPlants.textContent = "Avancar para Pos-colheita";
+    btnCycleNextToPlants.disabled = !(cycleDraft.phase_ids.length && cycleDraft.grow_ids.length);
+  } else {
+    btnCycleNextToPlants.textContent = "Avancar";
+    btnCycleNextToPlants.disabled = !purpose;
+  }
 }
 
-function refreshCyclePlantState() {
-  if (!cycleDraft.plant_ids.length) {
-    cyclePlantState.textContent = "Plantas selecionadas: nenhuma";
-    return;
+function syncCyclePhaseSelectionFromUI() {
+  cycleDraft.phase_ids = Array.from(cyclePhaseChecks)
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.getAttribute("data-cycle-phase") || "")
+    .filter((v) => v);
+  if (cycleCompleteToggle) {
+    cycleCompleteToggle.checked = cycleDraft.phase_ids.length === defaultCyclePhaseIds.length;
   }
-  const labels = cycleDraft.plant_ids.map((id) => {
-    const name = findPlantName(id);
-    return name ? `${name} (${id})` : id;
+  saveCycleDraft();
+  refreshCycleWizardState();
+}
+
+function applyCyclePhaseSelectionToUI() {
+  const selected = new Set(cycleDraft.phase_ids || []);
+  cyclePhaseChecks.forEach((cb) => {
+    const key = cb.getAttribute("data-cycle-phase") || "";
+    cb.checked = selected.has(key);
   });
-  cyclePlantState.textContent = `Plantas selecionadas (${cycleDraft.plant_ids.length}): ${labels.join(", ")}`;
+  if (cycleCompleteToggle) {
+    cycleCompleteToggle.checked = (cycleDraft.phase_ids || []).length === defaultCyclePhaseIds.length;
+  }
 }
 
 function renderCycleGrowList() {
@@ -1656,12 +2389,9 @@ function renderCycleGrowList() {
 
   const available = new Set(growsCache.map((g) => g.id));
   cycleDraft.grow_ids = cycleDraft.grow_ids.filter((id) => available.has(id));
-  const allowedPlants = new Set(
-    plantsCache
-      .filter((p) => cycleDraft.grow_ids.includes(p.grow_id))
-      .map((p) => p.id)
-  );
-  cycleDraft.plant_ids = cycleDraft.plant_ids.filter((id) => allowedPlants.has(id));
+  if (cycleDraft.drying_option === "outro_ambiente" && cycleDraft.drying_grow_id && !available.has(cycleDraft.drying_grow_id)) {
+    cycleDraft.drying_grow_id = "";
+  }
   saveCycleDraft();
 
   if (!growsCache.length) {
@@ -1684,44 +2414,126 @@ function renderCycleGrowList() {
   }
 
   refreshCycleWizardState();
+  renderCyclePostHarvestStep();
 }
 
-function renderCyclePlantList() {
-  if (!cyclePlantList) return;
-  cyclePlantList.innerHTML = "";
-
-  if (!cycleDraft.grow_ids.length) {
-    cyclePlantList.innerHTML = '<div class="muted">Selecione ambientes no passo anterior.</div>';
-    refreshCyclePlantState();
+function renderCyclePostHarvestStep() {
+  if (!cycleStep2Summary) return;
+  const isHarvestCycle = cycleDraft.purpose === "colheita";
+  if (!isHarvestCycle) {
+    if (cycleNonHarvestPlaceholder) cycleNonHarvestPlaceholder.style.display = "block";
+    cyclePostHarvestGuard.style.display = "none";
+    cycleDryingBlock.style.display = "none";
+    cycleCureBlock.style.display = "none";
+    cycleStep2Summary.textContent = "Tipo de cultivo: " + (cycleDraft.purpose || "--");
+    cyclePlantState.textContent = "";
+    cyclePlantMsg.textContent = "";
     return;
   }
 
-  const available = plantsCache.filter((p) => cycleDraft.grow_ids.includes(p.grow_id));
-  const availableSet = new Set(available.map((p) => p.id));
-  cycleDraft.plant_ids = cycleDraft.plant_ids.filter((id) => availableSet.has(id));
+  if (cycleNonHarvestPlaceholder) cycleNonHarvestPlaceholder.style.display = "none";
+  const selectedGrows = cycleDraft.grow_ids || [];
+  const selectedPhases = cycleDraft.phase_ids || [];
+  const phaseLabels = {
+    germinacao: "Germinacao",
+    plantula: "Plantula",
+    vegetativo: "Vegetativo",
+    floracao: "Floracao"
+  };
+  const phasesText = selectedPhases.map((id) => phaseLabels[id] || id).join(", ") || "Nenhuma";
+  const growsText = selectedGrows.map((id) => findGrowName(id) || id).join(", ") || "Nenhum";
+  cycleStep2Summary.textContent = `Fases: ${phasesText} | Ambientes: ${growsText}`;
+
+  if (selectedGrows.length !== 1) {
+    cyclePostHarvestGuard.style.display = "block";
+    cyclePostHarvestGuard.textContent = "Nesta versao, a etapa de pos-colheita esta disponivel apenas para cultivos com 1 ambiente selecionado.";
+    cycleDryingBlock.style.display = "none";
+    cycleCureBlock.style.display = "none";
+    cyclePlantState.textContent = "";
+    cyclePlantMsg.textContent = "";
+    return;
+  }
+
+  cyclePostHarvestGuard.style.display = "none";
+  cycleDryingBlock.style.display = "block";
+  const dryingEnabled = cycleDraft.drying_option !== "nao_acompanhar";
+  if (cycleDryingEnabledOptions.length) {
+    cycleDryingEnabledOptions.forEach((radio) => {
+      radio.checked = (radio.value === (dryingEnabled ? "ativado" : "desativado"));
+    });
+  }
+  if (cycleDryingOptionsWrap) {
+    cycleDryingOptionsWrap.style.display = dryingEnabled ? "block" : "none";
+  }
+  const baseGrowId = selectedGrows[0];
+  const options = Array.from(cycleDryingOptions);
+  options.forEach((opt) => { opt.checked = opt.value === cycleDraft.drying_option; });
+  if (dryingEnabled && !["mesmo_grow", "outro_ambiente", "generico"].includes(cycleDraft.drying_option)) {
+    cycleDraft.drying_option = "mesmo_grow";
+    options.forEach((opt) => { opt.checked = opt.value === cycleDraft.drying_option; });
+  }
+
+  if (cycleDraft.drying_option === "outro_ambiente") {
+    const availableOthers = growsCache.filter((g) => g.id !== baseGrowId);
+    cycleDryingOtherGrow.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = availableOthers.length ? "Selecione outro ambiente" : "Sem outro ambiente disponivel";
+    cycleDryingOtherGrow.appendChild(placeholder);
+    for (const g of availableOthers) {
+      const opt = document.createElement("option");
+      opt.value = g.id;
+      opt.textContent = `${g.name} (${g.id})`;
+      cycleDryingOtherGrow.appendChild(opt);
+    }
+    if (cycleDraft.drying_grow_id && availableOthers.some((g) => g.id === cycleDraft.drying_grow_id)) {
+      cycleDryingOtherGrow.value = cycleDraft.drying_grow_id;
+    } else {
+      cycleDraft.drying_grow_id = "";
+    }
+    cycleDryingOtherWrap.style.display = "block";
+  } else {
+    cycleDraft.drying_grow_id = "";
+    cycleDryingOtherWrap.style.display = "none";
+  }
+
+  const trackDrying = dryingEnabled;
+  cycleCureBlock.style.display = trackDrying ? "block" : "none";
+  if (!trackDrying) {
+    cycleDraft.cure_option = "nao_acompanhar";
+  }
+  const cureEnabled = cycleDraft.cure_option !== "nao_acompanhar";
+  if (cycleCureEnabledOptions.length) {
+    cycleCureEnabledOptions.forEach((radio) => {
+      radio.checked = (radio.value === (cureEnabled ? "ativado" : "desativado"));
+    });
+  }
+  if (cycleCureOptionsWrap) {
+    cycleCureOptionsWrap.style.display = (trackDrying && cureEnabled) ? "block" : "none";
+  }
+  if (trackDrying && cureEnabled && !["recipiente_sistema", "generico"].includes(cycleDraft.cure_option)) {
+    cycleDraft.cure_option = "recipiente_sistema";
+  }
+  Array.from(cycleCureOptions).forEach((opt) => { opt.checked = opt.value === cycleDraft.cure_option; });
+
+  const dryingLabelMap = {
+    nao_acompanhar: "Nao acompanhar secagem",
+    mesmo_grow: "Secar no mesmo ambiente",
+    outro_ambiente: "Secar em outro ambiente cadastrado",
+    generico: "Secagem em ambiente generico"
+  };
+  const cureLabelMap = {
+    nao_acompanhar: "Nao acompanhar cura",
+    recipiente_sistema: "Recipiente de cura (sistema)",
+    generico: "Ambiente generico"
+  };
+  const dryingLabel = dryingLabelMap[cycleDraft.drying_option] || cycleDraft.drying_option;
+  const cureLabel = cycleDraft.drying_option === "nao_acompanhar"
+    ? "Nao aplicavel"
+    : (cureLabelMap[cycleDraft.cure_option] || cycleDraft.cure_option);
+  cyclePlantState.textContent = `Secagem: ${dryingLabel} | Cura: ${cureLabel}`;
+  cyclePlantMsg.textContent = "Configuracao visual pronta. Na proxima etapa vamos ligar isso ao calendario e etapas reais.";
   saveCycleDraft();
-
-  if (!available.length) {
-    cyclePlantList.innerHTML = '<div class="muted">Nenhuma planta encontrada para os ambientes selecionados.</div>';
-    refreshCyclePlantState();
-    return;
-  }
-
-  for (const p of available) {
-    const growName = findGrowName(p.grow_id) || p.grow_id;
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className = "list-item";
-    if (cycleDraft.plant_ids.includes(p.id)) item.classList.add("active");
-    item.setAttribute("data-cycle-plant-id", p.id);
-    item.innerHTML = `
-      <div class="list-title">${p.name}</div>
-      <div class="muted">Especie: ${p.species_name || "--"} | Ambiente: ${growName}</div>
-    `;
-    cyclePlantList.appendChild(item);
-  }
-
-  refreshCyclePlantState();
 }
 
 function toggleCycleGrowSelection(id) {
@@ -1731,16 +2543,121 @@ function toggleCycleGrowSelection(id) {
   else cycleDraft.grow_ids.push(id);
   saveCycleDraft();
   renderCycleGrowList();
-  renderCyclePlantList();
+}
+
+function setCycleDryingOption(value) {
+  const valid = new Set(["nao_acompanhar", "mesmo_grow", "outro_ambiente", "generico"]);
+  if (!valid.has(value)) return;
+  cycleDraft.drying_option = value;
+  if (value !== "outro_ambiente") cycleDraft.drying_grow_id = "";
+  renderCyclePostHarvestStep();
+}
+
+function setCycleDryingEnabled(enabled) {
+  if (enabled) {
+    if (cycleDraft.drying_option === "nao_acompanhar") cycleDraft.drying_option = "mesmo_grow";
+  } else {
+    cycleDraft.drying_option = "nao_acompanhar";
+    cycleDraft.drying_grow_id = "";
+  }
+  renderCyclePostHarvestStep();
+}
+
+function setCycleCureOption(value) {
+  const valid = new Set(["nao_acompanhar", "recipiente_sistema", "generico"]);
+  if (!valid.has(value)) return;
+  cycleDraft.cure_option = value;
+  renderCyclePostHarvestStep();
+}
+
+function setCycleCureEnabled(enabled) {
+  if (enabled) {
+    if (cycleDraft.cure_option === "nao_acompanhar") cycleDraft.cure_option = "recipiente_sistema";
+  } else {
+    cycleDraft.cure_option = "nao_acompanhar";
+  }
+  renderCyclePostHarvestStep();
+}
+
+function handleCycleDryingOtherGrowChange() {
+  cycleDraft.drying_grow_id = normalizeTrim(cycleDryingOtherGrow.value);
+  saveCycleDraft();
+  renderCyclePostHarvestStep();
+}
+
+function refreshCyclePlantState() {
+  renderCyclePostHarvestStep();
+}
+
+function renderCyclePlantList() {
+  renderCyclePostHarvestStep();
 }
 
 function toggleCyclePlantSelection(id) {
-  if (!id) return;
-  const idx = cycleDraft.plant_ids.indexOf(id);
-  if (idx >= 0) cycleDraft.plant_ids.splice(idx, 1);
-  else cycleDraft.plant_ids.push(id);
+  void id;
+}
+
+function renderCycleSelectionStep() {
+  if (!cycleSelectionList) return;
+  const items = [];
+  for (const p of plantsCache) {
+    items.push({
+      id: `plant:${p.id}`,
+      title: p.name || p.id,
+      subtitle: `Planta | Especie: ${p.species_name || "--"}`
+    });
+  }
+  for (const s of seedsCache) {
+    items.push({
+      id: `seed:${s.id}`,
+      title: s.species_name || "Indefinido",
+      subtitle: `Semente | Quantidade: ${s.quantity}`
+    });
+  }
+
+  const available = new Set(items.map((i) => i.id));
+  cycleDraft.selection_ids = (cycleDraft.selection_ids || []).filter((id) => available.has(id));
   saveCycleDraft();
-  renderCyclePlantList();
+
+  if (!items.length) {
+    cycleSelectionList.innerHTML = '<div class="muted">Nenhuma planta ou semente cadastrada.</div>';
+    cycleSelectionState.textContent = "Selecionados: nenhum";
+    btnCycleStep3Next.disabled = true;
+    return;
+  }
+
+  cycleSelectionList.innerHTML = "";
+  for (const it of items) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "list-item";
+    if ((cycleDraft.selection_ids || []).includes(it.id)) item.classList.add("active");
+    item.setAttribute("data-cycle-selection-id", it.id);
+    item.innerHTML = `
+      <div class="list-title">${it.title}</div>
+      <div class="muted">${it.subtitle}</div>
+    `;
+    cycleSelectionList.appendChild(item);
+  }
+
+  cycleSelectionState.textContent = `Selecionados: ${(cycleDraft.selection_ids || []).length}`;
+  btnCycleStep3Next.disabled = !(cycleDraft.selection_ids || []).length;
+}
+
+function toggleCycleSelectionItem(id) {
+  if (!id) return;
+  const list = cycleDraft.selection_ids || [];
+  const idx = list.indexOf(id);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(id);
+  cycleDraft.selection_ids = list;
+  saveCycleDraft();
+  renderCycleSelectionStep();
+}
+
+function syncCyclesCacheFromState() {
+  cyclesCache = buildCyclesPayload().cycles || [];
+  renderCycles();
 }
 
 async function loadGrows() {
@@ -1756,6 +2673,14 @@ async function loadPlants() {
   renderPlants();
   if (currentGrowDetailId) renderGrowLinkedPlants();
   renderCyclePlantList();
+  renderCycleSelectionStep();
+}
+
+async function loadSeeds() {
+  const data = await apiGetSeeds();
+  seedsCache = data?.seeds || [];
+  renderSeeds();
+  renderCycleSelectionStep();
 }
 
 async function loadSpecies() {
@@ -1778,6 +2703,7 @@ async function refreshDataScreens() {
   await loadGrows();
   await loadSpecies();
   await loadPlants();
+  await loadSeeds();
   await loadCycles();
 }
 
@@ -1924,6 +2850,14 @@ growTypeSegment.addEventListener("click", (ev) => {
   setGrowType(btn.getAttribute("data-grow-type") || "indoor");
 });
 
+btnGrowFormToggle.addEventListener("click", () => {
+  setGrowFormVisible(!growFormVisible);
+});
+
+btnGrowFormDiscard.addEventListener("click", () => {
+  setGrowFormVisible(false);
+});
+
 btnRefreshGrows.addEventListener("click", async () => {
   try {
     await loadGrows();
@@ -1940,10 +2874,6 @@ btnCreateGrow.addEventListener("click", async () => {
       growsMsg.textContent = "Erro: " + (res.error || "create_failed");
       return;
     }
-    growName.value = "";
-    growWidth.value = "";
-    growDepth.value = "";
-    growHeight.value = "";
     growsCache = res.grows || [];
     activeGrowId = res.active_grow_id || "";
     const created = growsCache.length ? growsCache[growsCache.length - 1].id : "";
@@ -1954,6 +2884,7 @@ btnCreateGrow.addEventListener("click", async () => {
     }
     renderGrows();
     growsMsg.textContent = "Ambiente criado.";
+    setGrowFormVisible(false);
     if (created) openGrowDetail(created);
     if (cycleCreateFlowActive && created) {
       if (!cycleDraft.grow_ids.includes(created)) cycleDraft.grow_ids.push(created);
@@ -2172,11 +3103,82 @@ speciesList.addEventListener("click", (ev) => {
   renderSpecies();
 });
 
+btnSeedFormToggle.addEventListener("click", () => {
+  setSeedFormVisible(!seedFormVisible);
+});
+
+btnSeedFormDiscard.addEventListener("click", () => {
+  setSeedFormVisible(false);
+});
+
+seedSpeciesId.addEventListener("change", updateCreateSeedButtonState);
+seedQuantity.addEventListener("input", updateCreateSeedButtonState);
+seedQuantity.addEventListener("change", updateCreateSeedButtonState);
+
+btnRefreshSeeds.addEventListener("click", async () => {
+  try {
+    await loadSeeds();
+    seedsMsg.textContent = "Lista atualizada.";
+  } catch {
+    seedsMsg.textContent = "Falha ao carregar sementes.";
+  }
+});
+
+btnCreateSeed.addEventListener("click", async () => {
+  try {
+    const res = await apiCreateSeed(seedSpeciesId.value, seedQuantity.value);
+    if (!res?.ok) {
+      seedsMsg.textContent = "Erro: " + (res.error || "create_seed_failed");
+      return;
+    }
+    seedsCache = res.seeds || [];
+    renderSeeds();
+    renderCycleSelectionStep();
+    seedsMsg.textContent = "Sementes cadastradas.";
+    setSeedFormVisible(false);
+  } catch {
+    seedsMsg.textContent = "Falha ao cadastrar sementes.";
+  }
+});
+
+seedsList.addEventListener("click", async (ev) => {
+  const deleteBtn = ev.target.closest("[data-seed-delete]");
+  if (!deleteBtn) return;
+  try {
+    const res = await apiDeleteSeed(deleteBtn.dataset.seedDelete || "");
+    if (!res?.ok) {
+      seedsMsg.textContent = "Erro: " + (res.error || "delete_seed_failed");
+      return;
+    }
+    seedsCache = res.seeds || [];
+    renderSeeds();
+    seedsMsg.textContent = "Semente removida.";
+  } catch {
+    seedsMsg.textContent = "Falha ao remover semente.";
+  }
+});
+
+btnPlantFormToggle.addEventListener("click", () => {
+  if (plantFormMode === "hidden") {
+    setPlantFormMode("create");
+    return;
+  }
+  discardPlantForm();
+});
+
+btnPlantFormDiscard.addEventListener("click", () => {
+  discardPlantForm();
+});
+
 plantLifeState.addEventListener("change", syncPlantLifeState);
 plantSource.addEventListener("change", () => {
   syncPlantSourceConstraints();
   syncPlantLifeState();
 });
+plantDateUnknown.addEventListener("change", () => {
+  syncPlantLifeState();
+});
+plantGermStart.addEventListener("change", syncPlantLifeState);
 plantContainer.addEventListener("change", syncPlantContainerSoil);
 [
   plantName,
@@ -2211,7 +3213,7 @@ btnRefreshPlants.addEventListener("click", async () => {
 btnCreatePlant.addEventListener("click", async () => {
   try {
     const selectedTrainings = getSelectedTrainings();
-    const res = await apiCreatePlant(
+    const payload = [
       plantName.value,
       plantSpeciesId.value,
       plantGrow.value,
@@ -2220,57 +3222,97 @@ btnCreatePlant.addEventListener("click", async () => {
       plantSex.value,
       plantLifeState.value,
       plantGermStart.value,
+      plantDateUnknown.checked,
       plantContainer.value,
       plantSoilType.value,
       plantPhotoperiod.value,
       selectedTrainings.join(","),
       plantNotes.value
-    );
+    ];
+    const res = (plantFormMode === "edit" && editingPlantId)
+      ? await apiUpdatePlant(editingPlantId, ...payload)
+      : await apiCreatePlant(...payload);
     if (!res?.ok) {
-      plantsMsg.textContent = "Erro: " + (res.error || "create_failed");
+      plantsMsg.textContent = "Erro: " + (res.error || ((plantFormMode === "edit") ? "update_failed" : "create_failed"));
       return;
     }
 
-    plantName.value = "";
-    plantSource.value = "semente";
-    plantPurpose.value = "colheita";
-    plantSex.value = "indefinido";
-    plantLifeState.value = "nao_germinada";
-    plantGermStart.value = "";
-    plantContainer.value = "";
-    plantSoilType.value = "";
-    plantPhotoperiod.value = "fotoperiodo";
-    setSelectedTrainings(["indefinido"]);
-    updateTrainingSummary();
-    plantTrainingDetails.open = false;
-    plantNotes.value = "";
-    syncPlantSourceConstraints();
-    syncPlantLifeState();
-    updateCreatePlantButtonState();
     plantsCache = res.plants || [];
     renderPlants();
-    plantsMsg.textContent = "Planta criada.";
+    renderCycleSelectionStep();
+    plantsMsg.textContent = (plantFormMode === "edit") ? "Planta atualizada." : "Planta criada.";
+    resetPlantFormFields();
+    setPlantFormMode("hidden");
   } catch {
-    plantsMsg.textContent = "Falha ao criar planta.";
+    plantsMsg.textContent = (plantFormMode === "edit") ? "Falha ao atualizar planta." : "Falha ao criar planta.";
   }
 });
 
 plantsList.addEventListener("click", async (ev) => {
+  const duplicateBtn = ev.target.closest("[data-plant-duplicate]");
+  const editBtn = ev.target.closest("[data-plant-edit]");
   const deleteBtn = ev.target.closest("[data-plant-delete]");
-  if (!deleteBtn) return;
-
-  try {
-    const res = await apiDeletePlant(deleteBtn.dataset.plantDelete);
-    if (!res?.ok) {
-      plantsMsg.textContent = "Erro: " + (res.error || "delete_failed");
+  const row = ev.target.closest("[data-plant-item]");
+  if (duplicateBtn) {
+    const plantId = duplicateBtn.dataset.plantDuplicate || "";
+    const raw = window.prompt("Quantas copias deseja criar?", "1");
+    if (raw === null) return;
+    const qty = Number(raw);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      plantsMsg.textContent = "Quantidade de copias invalida.";
       return;
     }
-    plantsCache = res.plants || [];
-    renderPlants();
-    plantsMsg.textContent = "Planta removida.";
-  } catch {
-    plantsMsg.textContent = "Falha ao remover planta.";
+    try {
+      const res = await apiDuplicatePlant(plantId, qty);
+      if (!res?.ok) {
+        plantsMsg.textContent = "Erro: " + (res.error || "duplicate_failed");
+        return;
+      }
+      plantsCache = res.plants || [];
+      renderPlants();
+      plantsMsg.textContent = "Planta duplicada.";
+    } catch {
+      plantsMsg.textContent = "Falha ao duplicar planta.";
+    }
+    return;
   }
+  if (editBtn) {
+    const plant = findPlantById(editBtn.dataset.plantEdit || "");
+    if (!plant) {
+      plantsMsg.textContent = "Planta nao encontrada para edicao.";
+      return;
+    }
+    setPlantFormMode("edit", plant);
+    plantsMsg.textContent = "Editando planta.";
+    return;
+  }
+  if (deleteBtn) {
+    try {
+      const deletedPlantId = deleteBtn.dataset.plantDelete || "";
+      const res = await apiDeletePlant(deletedPlantId);
+      if (!res?.ok) {
+        plantsMsg.textContent = "Erro: " + (res.error || "delete_failed");
+        return;
+      }
+      plantsCache = res.plants || [];
+      renderPlants();
+      if (editingPlantId && editingPlantId === deletedPlantId) {
+        discardPlantForm();
+      }
+      if (expandedPlantId === deletedPlantId) {
+        expandedPlantId = "";
+      }
+      plantsMsg.textContent = "Planta removida.";
+    } catch {
+      plantsMsg.textContent = "Falha ao remover planta.";
+    }
+    return;
+  }
+
+  if (!row) return;
+  const id = row.getAttribute("data-plant-item") || "";
+  expandedPlantId = (expandedPlantId === id) ? "" : id;
+  renderPlants();
 });
 
 btnRefreshCycles.addEventListener("click", async () => {
@@ -2278,16 +3320,34 @@ btnRefreshCycles.addEventListener("click", async () => {
     await loadCycles();
     cyclesMsg.textContent = "Lista atualizada.";
   } catch {
-    cyclesMsg.textContent = "Falha ao carregar ciclos.";
+    cyclesMsg.textContent = "Falha ao carregar cultivos.";
   }
 });
 
+cyclesList.addEventListener("click", (ev) => {
+  const openBtn = ev.target.closest("[data-cultivation-open]");
+  if (!openBtn) return;
+  currentCultivationId = openBtn.getAttribute("data-cultivation-open") || "";
+  renderCultivationDetail();
+  show("cultivationDetail");
+});
+
 btnNewCycle.addEventListener("click", () => {
+  cycleDraft = {
+    purpose: "",
+    phase_ids: [],
+    grow_ids: [],
+    selection_ids: [],
+    drying_option: "nao_acompanhar",
+    drying_grow_id: "",
+    cure_option: "nao_acompanhar"
+  };
+  saveCycleDraft();
   refreshDataScreens().then(() => {
     show("cycleStep1");
     cyclesMsg.textContent = "Assistente iniciado: Passo 1/4.";
     refreshCycleWizardState();
-    renderCyclePlantList();
+    renderCyclePostHarvestStep();
   }).catch(() => {
     cycleWizardMsg.textContent = "Falha ao carregar ambientes.";
   });
@@ -2297,6 +3357,57 @@ btnCycleBack.addEventListener("click", () => {
   show("cycles");
 });
 
+btnCultivationBack.addEventListener("click", () => {
+  show("cycles");
+});
+
+cultivationPhasesList.addEventListener("click", (ev) => {
+  const removeBtn = ev.target.closest("[data-cultivation-phase-remove]");
+  if (!removeBtn || !currentCultivationId) return;
+  const key = removeBtn.getAttribute("data-cultivation-phase-remove") || "";
+  const item = findCultivationInState(currentCultivationId);
+  if (!item || !Array.isArray(item.phase_plan)) return;
+  item.phase_plan = item.phase_plan.filter((p) => p.key !== key);
+  syncCyclesCacheFromState();
+  renderCultivationDetail();
+});
+
+cultivationPhasesList.addEventListener("change", (ev) => {
+  const input = ev.target.closest("[data-cultivation-phase-days]");
+  if (!input || !currentCultivationId) return;
+  const key = input.getAttribute("data-cultivation-phase-days") || "";
+  const days = Number(input.value || 0);
+  if (!Number.isFinite(days) || days <= 0) {
+    renderCultivationDetail();
+    return;
+  }
+  const item = findCultivationInState(currentCultivationId);
+  if (!item || !Array.isArray(item.phase_plan)) return;
+  const phase = item.phase_plan.find((p) => p.key === key);
+  if (!phase) return;
+  phase.days = Math.floor(days);
+  syncCyclesCacheFromState();
+  renderCultivationDetail();
+});
+
+btnCultivationAddPhase.addEventListener("click", () => {
+  if (!currentCultivationId) return;
+  const key = normalizeTrim(cultivationAddPhaseSelect.value);
+  const catalog = cultivationPhaseCatalog();
+  if (!key || !catalog[key]) return;
+  const item = findCultivationInState(currentCultivationId);
+  if (!item) return;
+  if (!Array.isArray(item.phase_plan)) item.phase_plan = [];
+  if (item.phase_plan.some((p) => p.key === key)) return;
+  item.phase_plan.push({ key, label: catalog[key].label, days: catalog[key].days });
+  syncCyclesCacheFromState();
+  renderCultivationDetail();
+});
+
+btnCultivationConfirm.addEventListener("click", () => {
+  cultivationReviewMsg.textContent = "Cultivo confirmado. Em seguida vamos evoluir para calendario e execucao por etapa.";
+});
+
 cycleGrowList.addEventListener("click", (ev) => {
   const btn = ev.target.closest("[data-cycle-grow-id]");
   if (!btn) return;
@@ -2304,13 +3415,25 @@ cycleGrowList.addEventListener("click", (ev) => {
 });
 
 btnCycleNextToPlants.addEventListener("click", () => {
-  if (!cycleDraft.grow_ids.length) {
-    cycleWizardMsg.textContent = "Selecione pelo menos 1 ambiente para avancar.";
+  if (!cycleDraft.purpose) {
+    cycleWizardMsg.textContent = "Selecione o tipo de cultivo para avancar.";
     return;
   }
+  if (cycleDraft.purpose === "colheita") {
+    if (!cycleDraft.phase_ids.length) {
+      cycleWizardMsg.textContent = "Selecione pelo menos 1 fase para avancar.";
+      return;
+    }
+    if (!cycleDraft.grow_ids.length) {
+      cycleWizardMsg.textContent = "Selecione pelo menos 1 ambiente para avancar.";
+      return;
+    }
+  }
   cycleWizardMsg.textContent = "";
-  cyclePlantMsg.textContent = "Passo 2: selecione as plantas do ciclo.";
-  renderCyclePlantList();
+  cyclePlantMsg.textContent = (cycleDraft.purpose === "colheita")
+    ? "Passo 2: configure secagem e cura."
+    : "Passo 2: em breve teremos configuracoes para este tipo de cultivo.";
+  renderCyclePostHarvestStep();
   show("cycleStep2");
 });
 
@@ -2327,26 +3450,125 @@ btnCycleCreateGrowStart.addEventListener("click", () => {
   cycleCreateFlowActive = true;
   cycleWizardMsg.textContent = "Crie um ambiente na tela Ambientes.";
   show("grows");
-  growsMsg.textContent = "Fluxo do assistente: crie um ambiente para voltar ao ciclo.";
+  setGrowFormVisible(true);
+  growsMsg.textContent = "Fluxo do assistente: crie um ambiente para voltar ao cultivo.";
 });
 
 btnCycleStep2Back.addEventListener("click", () => {
   show("cycleStep1");
 });
 
-cyclePlantList.addEventListener("click", (ev) => {
-  const btn = ev.target.closest("[data-cycle-plant-id]");
-  if (!btn) return;
-  toggleCyclePlantSelection(btn.getAttribute("data-cycle-plant-id") || "");
+btnCycleStep2Next.addEventListener("click", () => {
+  renderCycleSelectionStep();
+  cycleSelectionMsg.textContent = "Selecione plantas ou sementes para continuar.";
+  show("cycleStep3");
 });
+
+btnCycleStep3Back.addEventListener("click", () => {
+  show("cycleStep2");
+});
+
+btnCycleStep3NewPlant.addEventListener("click", () => {
+  mountPlantFormInCycleStep3();
+  setSeedFormVisible(false);
+  setPlantFormMode("create");
+  cycleSelectionMsg.textContent = "Cadastre a nova planta e selecione no passo 3.";
+});
+
+btnCycleStep3NewSeed.addEventListener("click", () => {
+  mountSeedFormInCycleStep3();
+  setPlantFormMode("hidden");
+  setSeedFormVisible(true);
+  cycleSelectionMsg.textContent = "Cadastre a nova semente e selecione no passo 3.";
+});
+
+btnCycleStep3Next.addEventListener("click", () => {
+  if (!(cycleDraft.selection_ids || []).length) {
+    cycleSelectionMsg.textContent = "Selecione pelo menos 1 planta ou semente para avancar.";
+    return;
+  }
+  apiGenerateCultivationFromDraft(cycleDraft).then((res) => {
+    if (!res?.ok) {
+      cycleSelectionMsg.textContent = "Erro: " + (res.error || "generate_cultivation_failed");
+      return;
+    }
+    cyclesCache = res.cycles || [];
+    renderCycles();
+    currentCultivationId = res.cultivation_id || "";
+    renderCultivationDetail();
+    show("cultivationDetail");
+    cyclesMsg.textContent = "Cultivo gerado com sucesso.";
+  }).catch(() => {
+    cycleSelectionMsg.textContent = "Falha ao gerar cultivo.";
+  });
+});
+
+cycleSelectionList.addEventListener("click", (ev) => {
+  const btn = ev.target.closest("[data-cycle-selection-id]");
+  if (!btn) return;
+  toggleCycleSelectionItem(btn.getAttribute("data-cycle-selection-id") || "");
+});
+
+cyclePhaseChecks.forEach((cb) => {
+  cb.addEventListener("change", syncCyclePhaseSelectionFromUI);
+});
+
+cyclePurposeOptions.forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (!radio.checked) return;
+    cycleDraft.purpose = radio.value;
+    saveCycleDraft();
+    refreshCycleWizardState();
+  });
+});
+
+if (cycleCompleteToggle) {
+  cycleCompleteToggle.addEventListener("change", () => {
+    if (cycleCompleteToggle.checked) {
+      cycleDraft.phase_ids = [...defaultCyclePhaseIds];
+    } else {
+      cycleDraft.phase_ids = [];
+    }
+    saveCycleDraft();
+    refreshCycleWizardState();
+  });
+}
+
+cycleDryingEnabledOptions.forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (radio.checked) setCycleDryingEnabled(radio.value === "ativado");
+  });
+});
+
+cycleDryingOptions.forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (radio.checked) setCycleDryingOption(radio.value);
+  });
+});
+
+cycleCureOptions.forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (radio.checked) setCycleCureOption(radio.value);
+  });
+});
+
+cycleCureEnabledOptions.forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (radio.checked) setCycleCureEnabled(radio.value === "ativado");
+  });
+});
+
+if (cycleDryingOtherGrow) {
+  cycleDryingOtherGrow.addEventListener("change", handleCycleDryingOtherGrowChange);
+}
 
 loadCycleDraft();
 setGrowType(growType.value);
+setGrowFormVisible(false);
 renderToolFormKind();
-syncPlantSourceConstraints();
-setSelectedTrainings(["indefinido"]);
-updateTrainingSummary();
-syncPlantLifeState();
-updateCreatePlantButtonState();
 setSpeciesPanelExpanded(false);
+restoreInlinePlantSeedForms();
+setSeedFormVisible(false);
+resetPlantFormFields();
+setPlantFormMode("hidden");
 bootRefresh();
